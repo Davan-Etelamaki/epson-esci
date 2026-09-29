@@ -10,8 +10,10 @@ they look physically dead: the LED blinks forever and no scanner API can talk to
 them.
 
 The tool reads SANE's own device databases to work out what any attached EPSON
-scanner needs, so it covers the whole family, not just one model. It ships no
-EPSON binaries — see [Redistribution](#redistribution-and-licensing).
+scanner needs, so the **diagnosis** covers all 594 models in `epkowa.desc`. The
+**automated fix** currently covers 1 of the 19 plugin families — see
+[Scope](#scope-what-works-for-which-models). It ships no EPSON binaries — see
+[Redistribution](#redistribution-and-licensing).
 
 ```
 $ ./epson-esci detect
@@ -22,6 +24,7 @@ $ ./epson-esci detect
 ## Contents
 
 - [Who this is for](#who-this-is-for)
+- [Scope: what works for which models](#scope-what-works-for-which-models)
 - [Quick start](#quick-start)
 - [Why these scanners look dead](#why-these-scanners-look-dead)
 - [Commands](#commands)
@@ -49,6 +52,26 @@ Your scanner shows one of these, and you have confirmed it is listed as
 Models that behave this way include the Perfection V19, V33, V35, V37, V39, V370,
 GT-S640, GT-S650, GT-F500, GT-F600, GT-F700 and relatives. `epson-esci explain
 <usbid>` tells you whether a given id needs a plugin.
+
+## Scope: what works for which models
+
+Measured, not aspirational:
+
+| Commands | Coverage |
+| --- | --- |
+| `detect`, `explain`, `doctor`, `reset` | all 594 models in `epkowa.desc` — everything is read from your system at run time |
+| `fetch`, `install`, `firmware --repair` | **1 of 19 plugin families**: `iscan-plugin-gt-s650`, i.e. GT-S650 and Perfection V39 |
+
+Worth knowing before you decide this tool is for you: **545 of those 594 models
+need no plugin at all** — open-source SANE handles them, and you want
+`sane-airscan` or the `epsonds` backend instead. This exists for the awkward 49
+that need a non-free interpreter and look physically dead without one.
+
+If `explain` names a plugin other than `iscan-plugin-gt-s650`, expect
+`doctor`, `explain` and `reset` to work and `fetch` to have nothing to download.
+Install the plugin from your distribution, then use `firmware` to check the blob.
+[Supporting another model](#supporting-another-model) is around 15 minutes per
+family and pull requests are welcome.
 
 ## Quick start
 
