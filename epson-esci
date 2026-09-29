@@ -48,60 +48,158 @@ import time
 import urllib.request
 
 USBDEVFS_RESET = 0x5514  # _IO('U', 20)
-SYSFS_USB = "/sys/bus/usb/devices"
+def _path(var, default):
+    "Data paths are overridable so checks can run against fixtures."
+    return os.environ.get(var, default)
+
+SYSFS_USB = _path("EPSON_ESCI_SYSFS", "/sys/bus/usb/devices")
 EPSON_VENDOR = "04b8"
 # dpkg-query version format, assembled at runtime so this stays a literal.
 DPKG_VER = "$" + "{Version}"
 
-EPKOWA_DESC = "/usr/share/iscan-data/epkowa.desc"
-INTERPRETER_DB = "/var/lib/iscan/interpreter"
-SANE_BACKENDS_HTML = "/usr/share/doc/libsane-common/sane-backends.html"
-UDEV_RULES_DIRS = ("/etc/udev/rules.d", "/lib/udev/rules.d", "/usr/lib/udev/rules.d")
-SANE_CONFIG_DIR = "/etc/sane.d"
+EPKOWA_DESC = _path("EPSON_ESCI_DESC", "/usr/share/iscan-data/epkowa.desc")
+INTERPRETER_DB = _path("EPSON_ESCI_INTERPRETER", "/var/lib/iscan/interpreter")
+SANE_BACKENDS_HTML = _path("EPSON_ESCI_SANE_DOC", "/usr/share/doc/libsane-common/sane-backends.html")
+UDEV_RULES_DIRS = _path("EPSON_ESCI_UDEV_DIRS", "/etc/udev/rules.d:/lib/udev/rules.d:/usr/lib/udev/rules.d").split(":")
+SANE_CONFIG_DIR = _path("EPSON_ESCI_SANE_CONFIG", "/etc/sane.d")
 
-# Bundles this tool knows how to fetch and verify. Adding a plugin here means
-# recording the checksums of EPSON's own bits; the AUR PKGBUILDs are a good
-# independent source for those values.
+# Every bundle below was downloaded from EPSON and hashed locally, not copied
+# from someone else's recipe. Full record in data/verified-sources.json.
+#
+# Keyed by plugin family -- the name epkowa.desc writes in its :comment field,
+# which is how a device is mapped to a download with no hard-coded model list.
+#
+# format "deb" installs with apt. "rpm" is all EPSON publishes for that family;
+# install says so instead of pretending otherwise.
+#
+# "firmware" records the interpreter blob that family ships, so the firmware
+# check can tell you where an installed blob actually came from.
+
+BASE = "https://download2.ebz.epson.net/iscan/plugin/"
+
+
+def _bundle(family, url, sha256, size, fmt="deb", firmware=(), also=()):
+    return {
+        "url": url,
+        "sha256": sha256,
+        "bytes": size,
+        "format": fmt,
+        "plugin": "iscan-plugin-" + family,
+        "provides": ["iscan", "iscan-data", "iscan-plugin-" + family],
+        "firmware": list(firmware),
+        "also": list(also),
+    }
+
+
 BUNDLES = {
-    "iscan-gt-s650": {
-        "url": ("https://download2.ebz.epson.net/iscan/plugin/gt-s650/deb/x64/"
-                "iscan-gt-s650-bundle-2.30.4.x64.deb.tar.gz"),
-        "sha256": "553eb55fef42ebcae562f3b8442d43093a16d8b53893da3b0d25396e81377949",
-        "provides": ["iscan", "iscan-data", "iscan-plugin-gt-s650"],
-        "purpose": "epkowa backend, device data, and the gt-s650 interpreter plugin",
-    },
+    "cx4400": _bundle("cx4400",
+        BASE + "cx4400/deb/x64/iscan-cx4400-bundle-2.30.4.x64.deb.tar.gz",
+        "1033f226fe06f4422474d762292c3fee1cde59d18a35b969f60ad73090cf3278", 591626),
+    "ds-30": _bundle("ds-30",
+        BASE + "ds-30/deb/x64/iscan-ds-30-bundle-2.30.4.x64.deb.tar.gz",
+        "e42d7c79d7239b00f53c089e45815cd89d934d1dd7e937407ca595c44cd44715", 586656),
+    "gt-1500": _bundle("gt-1500",
+        BASE + "gt-1500/deb/x64/iscan-gt-1500-bundle-2.30.4.x64.deb.tar.gz",
+        "f23a1af592b3555d3142cbf449d40b8328d3f5baa47327e954118a849a61e3b9", 610141,
+        firmware=[("esfw86.bin", "6caa307a77d791578f5c7611bb62dfb20e6c609b")]),
+    "gt-f670": _bundle("gt-f670",
+        BASE + "gt-f670/deb/x64/iscan-gt-f670-bundle-2.30.4.x64.deb.tar.gz",
+        "c08c9c49a421a2a462da495ff27a7609ebde2de8021907029bfa2e8c25e12d0f", 674430,
+        firmware=[("esfw7A.bin", "3bf50773d9a83e9364059fd1fe26a393f5cefb9f")]),
+    "gt-f700": _bundle("gt-f700",
+        BASE + "gt-f700/deb/x64/iscan-gt-f700-bundle-2.30.4.x64.deb.tar.gz",
+        "86e8223e7a77a1563913914dd9d85d4ecbae2fcd456553be3b3b2c5f9662204b", 646727,
+        firmware=[("esfw68.bin", "912ecb88a1ba9e957102bd0c38369c1098917494")]),
+    "gt-s600": _bundle("gt-s600",
+        BASE + "gt-s600/rpm/x64/iscan-gt-s600-bundle-2.30.4.x64.rpm.tar.gz",
+        "fe1356b1d5c40bc5ac985a5693166efb9e5049a78b412f49c385eb503eadf2c6", 602543,
+        fmt="rpm"),
+    "gt-s650": _bundle("gt-s650",
+        BASE + "gt-s650/deb/x64/iscan-gt-s650-bundle-2.30.4.x64.deb.tar.gz",
+        "553eb55fef42ebcae562f3b8442d43093a16d8b53893da3b0d25396e81377949", 595329,
+        firmware=[("esfw010c.bin", "bd30c27113b06e957c63891fb6c10ca7a80034ee")],
+        also=["epsonscan2-6.6.2.5"]),
+    "gt-x750": _bundle("gt-x750",
+        BASE + "gt-x750/deb/x64/iscan-gt-x750-bundle-2.30.4.x64.deb.tar.gz",
+        "9207c474c13ba8699a49ccf40bd80df2d8a7e2baf4ddc32e70b6dd5b3b14c3d5", 655604,
+        firmware=[("esfw54.bin", "9ccf8d9421f6cd153e6e85ef08d97294032a3406")]),
+    "gt-x770": _bundle("gt-x770",
+        BASE + "gt-x770/deb/x64/iscan-gt-x770-bundle-2.30.4.x64.deb.tar.gz",
+        "5c10ccc8a3d17f0a5be4b36a9ca273a2e16749a50bb61dbdba71f4587bc3181e", 666703,
+        firmware=[("esfw7C.bin", "2230ef57a121591f6c69efedbefac7f42ccdff40")]),
+    "gt-x820": _bundle("gt-x820",
+        BASE + "gt-x820/rpm/x64/iscan-gt-x820-bundle-2.30.4.x64.rpm.tar.gz",
+        "63647dac68e26bfee5bd75108cc6a4df0fddb8453a1e3bac2d63dea7db518bee", 637901,
+        fmt="rpm"),
+    "gt-x830": _bundle("gt-x830",
+        BASE + "gt-x830/rpm/x64/iscan-gt-x830-bundle-2.30.4.x64.rpm.tar.gz",
+        "3d792c25db38d6cac50fe9026f64fb89a8a20f512d4b6d555b20c64623ee5e52", 642884,
+        fmt="rpm"),
+    "perfection-v370": _bundle("perfection-v370",
+        BASE + "perfection-v370/deb/x64/iscan-perfection-v370-bundle-2.30.4.x64.deb.tar.gz",
+        "7b44da1637432717aa2a2f7fd7dfbb04bcf486310484ce1c0a63ef5cb9968a32", 652355,
+        firmware=[("esfwdd.bin", "e908ceb97196d3355cbc4893848e458592eceb05")]),
+    "perfection-v550": _bundle("perfection-v550",
+        BASE + "perfection-v550/rpm/x64/iscan-perfection-v550-bundle-2.30.4.x64.rpm.tar.gz",
+        "f8b3abf21354fc5b9bc87753cef950b6c0f07bf322a94aaff2c163bafcf50cd9", 642849,
+        fmt="rpm"),
+}
+
+# Families that need a plugin but have no bundle at EPSON's CDN. Checked by
+# probing 12 plausible versions in both deb and rpm; every one returned 404.
+# These are 2004-era flatbeds -- say so rather than failing with a bare 404.
+NO_BUNDLE = ("gt-7200", "gt-7300", "gt-9400", "gt-f500", "gt-f520", "gt-f600")
+
+# Packages that carry a *different build* of a firmware blob. This is how a
+# build that fails on one board revision gets replaced by one that works.
+FIRMWARE_SOURCES = {
     "epsonscan2-6.6.2.5": {
         "url": ("https://download2.ebz.epson.net/epsonscan2/common/deb/x64/"
                 "epsonscan2-bundle-6.6.2.5.x86_64.deb.tar.gz"),
         "sha512": ("6f777e1f3c90693611078fa8bb942744271c8c7dcfc44d9a2eda9f14e5cd1c07"
                    "c407593ca2aeb5ad30e6e96a0f8b144e10613907c4fcf4e649dc2198e7079ec9"),
         "provides": ["epsonscan2-non-free-plugin"],
-        "purpose": "source of the working esfw010c.bin for Perfection V39 board rev J371A",
+        "carries": [("esfw010c.bin", "997f953d3e9373aa515c92bd3025d6a3ac22b8e5")],
     },
 }
 
-# Some firmware blobs ship under the same filename with different contents, and
-# one build can be broken for a specific board revision while working for others.
-# sha1 of the blob -> note.
+# Human-confirmed firmware knowledge, as opposed to the observed hashes above.
+#
+# A blob is never good or bad in itself: the same file runs on one board
+# revision and fails on another. So a known-bad build is recorded as a symptom
+# to match, not as a verdict -- flagging it FAIL for everyone would call a
+# working GT-S650 broken.
 FIRMWARE_DB = {
     "esfw010c.bin": {
-        "bad": {
-            "bd30c27113b06e957c63891fb6c10ca7a80034ee":
-                "shipped by iscan-plugin-gt-s650 1.1.1; causes 'sane_start: Invalid "
-                "argument' on Perfection V39 board rev J371A",
-        },
         "good": {
             "997f953d3e9373aa515c92bd3025d6a3ac22b8e5":
-                "shipped by epsonscan2-non-free-plugin 1.0.0.5 (bundle 6.6.2.5); "
-                "confirmed working on J371A",
+                "build from epsonscan2-non-free-plugin 1.0.0.5 (bundle 6.6.2.5); "
+                "confirmed working on Perfection V39 board rev J371A",
+        },
+        "conflict": {
+            "bd30c27113b06e957c63891fb6c10ca7a80034ee":
+                "the build EPSON ships in iscan-plugin-gt-s650. On some Perfection "
+                "V39 board revisions (J371A) it fails with 'sane_start: Invalid "
+                "argument' while the same file works on a genuine GT-S650. If that "
+                "is your symptom: epson-esci firmware --repair",
         },
         "unknown": {
             "48a29638abec6ed431b4c486ceae35ee244d8555":
-                "shipped by epsonscan2-non-free-plugin 1.0.0.6 (bundle 6.7.65.0); "
-                "not verified on J371A",
+                "build from epsonscan2-non-free-plugin 1.0.0.6 (bundle 6.7.65.0); "
+                "not verified on any hardware",
         },
     },
 }
+
+# Where each observed blob came from, derived from BUNDLES so the two tables
+# cannot drift apart. Key: (filename, sha1) -> [package names].
+OBSERVED_FIRMWARE = {}
+for _fam, _b in BUNDLES.items():
+    for _name, _sha1 in _b["firmware"]:
+        OBSERVED_FIRMWARE.setdefault((_name, _sha1), []).append(_b["plugin"])
+for _src, _s in FIRMWARE_SOURCES.items():
+    for _name, _sha1 in _s["carries"]:
+        OBSERVED_FIRMWARE.setdefault((_name, _sha1), []).append(_s["provides"][0])
 
 OK, WARN, FAIL, INFO = "PASS", "WARN", "FAIL", "INFO"
 
@@ -162,14 +260,16 @@ def run(argv, dry: bool = False):
 # ------------------------------------------------------------------ epkowa.desc
 
 
-def parse_epkowa_desc(path: str = EPKOWA_DESC) -> dict:
+def parse_epkowa_desc(path=None) -> dict:
     """Group epkowa.desc entries by USB id.
 
     Returns {(vendor, product): [{model, interface, status, comment}, ...]}.
     One USB id usually maps to several marketing names for the same silicon --
     04b8:013d is both "GT-S650" and "Perfection V39".
+
+    The path defaults to the system database; tests pass a fixture instead.
     """
-    text = read_text(path)
+    text = read_text(path or EPKOWA_DESC)
     if not text:
         return {}
 
@@ -366,18 +466,28 @@ def udev_rule_for(vendor: str, product: str) -> str | None:
 
 
 def firmware_state(path: str, basename: str):
-    """Classify a firmware blob against FIRMWARE_DB. Returns (level, note)."""
+    """Classify a firmware blob. Returns (level, note).
+
+    A known-bad build is reported as WARN, never FAIL. The same file runs on
+    one board revision and fails on another, so calling it broken for everyone
+    would tell the owner of a working GT-S650 that their scanner is faulty. It
+    is a symptom to match, with the repair spelled out.
+    """
     if not exists(path):
         return FAIL, "missing"
     sha1 = digest(path, "sha1")
-    table = FIRMWARE_DB.get(basename)
-    if not table:
-        return INFO, "sha1 " + sha1 + " (no reference data for this blob)"
-    for key, level in (("bad", FAIL), ("good", OK), ("unknown", WARN)):
+    origin = ", ".join(OBSERVED_FIRMWARE.get((basename, sha1), []))
+    table = FIRMWARE_DB.get(basename, {})
+    for key, level in (("good", OK), ("conflict", WARN), ("unknown", WARN)):
         note = table.get(key, {}).get(sha1)
         if note:
-            return level, "sha1 " + sha1 + " -- " + note
-    return WARN, "sha1 " + sha1 + " -- unrecognised build, in neither the good nor bad list"
+            where = " (the build " + origin + " ships)" if origin else ""
+            return level, "sha1 " + sha1 + where + " -- " + note
+    if origin:
+        return INFO, ("sha1 " + sha1 + " -- the build " + origin + " ships; "
+                      "nothing recorded against it")
+    return WARN, ("sha1 " + sha1 + " -- unrecognised build, not in any package "
+                  "this tool knows about")
 
 
 # ----------------------------------------------------------------------- checks
@@ -705,19 +815,76 @@ def fetch_one(name: str, spec: dict, dest: str, dry: bool = False) -> bool:
     return True
 
 
+def device_families():
+    """Map attached scanners to bundles via the plugin name epkowa.desc gives.
+
+    Returns (wanted, gaps). wanted is an ordered list of (name, spec); gaps
+    names families that need a plugin this tool cannot supply.
+    """
+    wanted, gaps = [], []
+    for dev in find_epson_devices():
+        for plugin in dev["plugins"]:
+            fam = plugin.replace("iscan-plugin-", "")
+            if fam in BUNDLES:
+                if fam not in [w[0] for w in wanted]:
+                    wanted.append((fam, BUNDLES[fam]))
+                for extra in BUNDLES[fam]["also"]:
+                    if extra not in [w[0] for w in wanted]:
+                        wanted.append((extra, FIRMWARE_SOURCES[extra]))
+            elif fam in NO_BUNDLE:
+                gaps.append((fam, "EPSON publishes no Linux bundle for it"))
+            else:
+                gaps.append((fam, "family is not in the table of known bundles"))
+    return wanted, gaps
+
+
 def cmd_fetch(args) -> int:
-    names = args.only or list(BUNDLES)
+    if args.only:
+        names = list(args.only)
+    elif args.all:
+        names = list(BUNDLES)
+    else:
+        wanted, gaps = device_families()
+        if wanted:
+            names = [w[0] for w in wanted]
+            print("attached scanner needs: " + ", ".join(names))
+        elif gaps:
+            for fam, why in gaps:
+                print("iscan-plugin-%s: %s" % (fam, why), file=sys.stderr)
+            print("", file=sys.stderr)
+            print("This tool cannot download that one. Two ways forward:", file=sys.stderr)
+            print("  * your distribution may still package it; search for iscan-plugin-*",
+                  file=sys.stderr)
+            print("  * doctor, explain and reset still work without it; only fetch and",
+                  " install need the bundle", file=sys.stderr)
+            return 1
+        else:
+            print("no EPSON scanner attached. Name a family with --only, or use --all.",
+                  file=sys.stderr)
+            print("known: " + ", ".join(sorted(BUNDLES)), file=sys.stderr)
+            return 2
+
+    unknown = [n for n in names if n not in BUNDLES and n not in FIRMWARE_SOURCES]
+    if unknown:
+        print("unknown bundle(s): " + ", ".join(unknown), file=sys.stderr)
+        print("known: " + ", ".join(sorted(list(BUNDLES) + list(FIRMWARE_SOURCES))),
+              file=sys.stderr)
+        return 2
+
     print("downloading into " + args.dest)
-    print("these are EPSON's files under EPSON's EULA: fetch them yourself, and never "
-          "commit them\n")
+    print("EPSON files under the EPSON EULA: fetch them yourself, never commit them")
+    print()
     ok = True
     for n in names:
-        ok = fetch_one(n, BUNDLES[n], args.dest, args.dry_run) and ok
+        spec = BUNDLES.get(n) or FIRMWARE_SOURCES[n]
+        if spec.get("format") == "rpm":
+            print("  note: %s ships rpm only; install explains what that means" % n)
+        ok = fetch_one(n, spec, args.dest, args.dry_run) and ok
     if not ok:
         print("a download failed; do not install from a partial directory", file=sys.stderr)
         return 1
     if not args.dry_run:
-        print("\nnext: epson-esci install --from " + args.dest)
+        print("next: epson-esci install --from " + args.dest)
     return 0
 
 
@@ -833,7 +1000,10 @@ def main() -> int:
 
     s = sub.add_parser("fetch", help="download and verify EPSON bundles")
     s.add_argument("--dest", default="~/epson-esci-cache")
-    s.add_argument("--only", action="append", choices=sorted(BUNDLES))
+    s.add_argument("--only", action="append",
+                   choices=sorted(list(BUNDLES) + list(FIRMWARE_SOURCES)),
+                   help="what to fetch; default is whatever the attached scanner needs")
+    s.add_argument("--all", action="store_true", help="fetch every known family")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_fetch)
 

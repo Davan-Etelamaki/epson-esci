@@ -1,0 +1,178 @@
+{
+  "bundles": [
+    {
+      "bytes": 591626,
+      "firmware": [],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-cx4400",
+      "sha256": "1033f226fe06f4422474d762292c3fee1cde59d18a35b969f60ad73090cf3278",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/cx4400/deb/x64/iscan-cx4400-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 586656,
+      "firmware": [],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-ds-30",
+      "sha256": "e42d7c79d7239b00f53c089e45815cd89d934d1dd7e937407ca595c44cd44715",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/ds-30/deb/x64/iscan-ds-30-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 610141,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfw86.bin",
+          "sha1": "6caa307a77d791578f5c7611bb62dfb20e6c609b"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-gt-1500",
+      "sha256": "f23a1af592b3555d3142cbf449d40b8328d3f5baa47327e954118a849a61e3b9",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-1500/deb/x64/iscan-gt-1500-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 674430,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfw7A.bin",
+          "sha1": "3bf50773d9a83e9364059fd1fe26a393f5cefb9f"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-gt-f670",
+      "sha256": "c08c9c49a421a2a462da495ff27a7609ebde2de8021907029bfa2e8c25e12d0f",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-f670/deb/x64/iscan-gt-f670-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 646727,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfw68.bin",
+          "sha1": "912ecb88a1ba9e957102bd0c38369c1098917494"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-gt-f700",
+      "sha256": "86e8223e7a77a1563913914dd9d85d4ecbae2fcd456553be3b3b2c5f9662204b",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-f700/deb/x64/iscan-gt-f700-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 602543,
+      "firmware": [],
+      "format": "rpm/x64",
+      "plugin": "iscan-plugin-gt-s600",
+      "sha256": "fe1356b1d5c40bc5ac985a5693166efb9e5049a78b412f49c385eb503eadf2c6",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-s600/rpm/x64/iscan-gt-s600-bundle-2.30.4.x64.rpm.tar.gz"
+    },
+    {
+      "bytes": 595329,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfw010c.bin",
+          "sha1": "bd30c27113b06e957c63891fb6c10ca7a80034ee"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-gt-s650",
+      "sha256": "553eb55fef42ebcae562f3b8442d43093a16d8b53893da3b0d25396e81377949",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-s650/deb/x64/iscan-gt-s650-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 655604,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfw54.bin",
+          "sha1": "9ccf8d9421f6cd153e6e85ef08d97294032a3406"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-gt-x750",
+      "sha256": "9207c474c13ba8699a49ccf40bd80df2d8a7e2baf4ddc32e70b6dd5b3b14c3d5",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-x750/deb/x64/iscan-gt-x750-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 666703,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfw7C.bin",
+          "sha1": "2230ef57a121591f6c69efedbefac7f42ccdff40"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-gt-x770",
+      "sha256": "5c10ccc8a3d17f0a5be4b36a9ca273a2e16749a50bb61dbdba71f4587bc3181e",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-x770/deb/x64/iscan-gt-x770-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 637901,
+      "firmware": [],
+      "format": "rpm/x64",
+      "plugin": "iscan-plugin-gt-x820",
+      "sha256": "63647dac68e26bfee5bd75108cc6a4df0fddb8453a1e3bac2d63dea7db518bee",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-x820/rpm/x64/iscan-gt-x820-bundle-2.30.4.x64.rpm.tar.gz"
+    },
+    {
+      "bytes": 642884,
+      "firmware": [],
+      "format": "rpm/x64",
+      "plugin": "iscan-plugin-gt-x830",
+      "sha256": "3d792c25db38d6cac50fe9026f64fb89a8a20f512d4b6d555b20c64623ee5e52",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/gt-x830/rpm/x64/iscan-gt-x830-bundle-2.30.4.x64.rpm.tar.gz"
+    },
+    {
+      "bytes": 652355,
+      "firmware": [
+        {
+          "bytes": 65793,
+          "name": "esfwdd.bin",
+          "sha1": "e908ceb97196d3355cbc4893848e458592eceb05"
+        }
+      ],
+      "format": "deb/x64",
+      "plugin": "iscan-plugin-perfection-v370",
+      "sha256": "7b44da1637432717aa2a2f7fd7dfbb04bcf486310484ce1c0a63ef5cb9968a32",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/perfection-v370/deb/x64/iscan-perfection-v370-bundle-2.30.4.x64.deb.tar.gz"
+    },
+    {
+      "bytes": 642849,
+      "firmware": [],
+      "format": "rpm/x64",
+      "plugin": "iscan-plugin-perfection-v550",
+      "sha256": "f8b3abf21354fc5b9bc87753cef950b6c0f07bf322a94aaff2c163bafcf50cd9",
+      "url": "https://download2.ebz.epson.net/iscan/plugin/perfection-v550/rpm/x64/iscan-perfection-v550-bundle-2.30.4.x64.rpm.tar.gz"
+    }
+  ],
+  "generated": "2026-09-29",
+  "method": "downloaded from EPSON and hashed locally; AUR PKGBUILDs used only to discover versions",
+  "unavailable": [
+    {
+      "note": "no bundle at EPSON CDN for any version tried (12 versions x deb+rpm)",
+      "plugin": "iscan-plugin-gt-7200"
+    },
+    {
+      "note": "no bundle at EPSON CDN for any version tried (12 versions x deb+rpm)",
+      "plugin": "iscan-plugin-gt-7300"
+    },
+    {
+      "note": "no bundle at EPSON CDN for any version tried (12 versions x deb+rpm)",
+      "plugin": "iscan-plugin-gt-9400"
+    },
+    {
+      "note": "no bundle at EPSON CDN for any version tried (12 versions x deb+rpm)",
+      "plugin": "iscan-plugin-gt-f500"
+    },
+    {
+      "note": "no bundle at EPSON CDN for any version tried (12 versions x deb+rpm)",
+      "plugin": "iscan-plugin-gt-f520"
+    },
+    {
+      "note": "no bundle at EPSON CDN for any version tried (12 versions x deb+rpm)",
+      "plugin": "iscan-plugin-gt-f600"
+    }
+  ]
+}
