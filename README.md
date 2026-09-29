@@ -86,8 +86,7 @@ need the bundle.
 ## Quick start
 
 ```bash
-curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/main/epson-esci
-chmod +x epson-esci            # or: sudo make install
+chmod +x epson-esci            # one file, stdlib only; or: sudo make install
 
 ./epson-esci doctor            # what is wrong, and what fixes it
 ./epson-esci fetch             # download what this scanner needs, verify checksums

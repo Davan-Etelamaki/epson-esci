@@ -10,8 +10,8 @@ are https on EPSON's own CDN; the test suite rejects any other URL.
 This is deliberate. Other packaging in this ecosystem still pulls these same
 firmware blobs over **plain HTTP** with nothing but an md5 embedded in the URL
 path — the old `iscan-firmware` recipe style still in circulation in the AUR.
-That only survives an honest mirror; it is not something a man-in-the-middle
-cannot pass. Do not weaken this file's pinning to match.
+It survives only while the mirror is honest: an md5 over plain HTTP catches a
+corrupt download, not an attacker. Do not weaken this file's pinning to match.
 
 ## No EPSON binaries here
 
