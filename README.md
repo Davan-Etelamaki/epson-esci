@@ -153,9 +153,16 @@ Plus the boring one: your user must be allowed to open `/dev/bus/usb/BBB/DDD`.
 | `fetch [--dest DIR] [--only FAM] [--all]` | Download and verify what this scanner needs | no |
 | `install --from DIR [--dry-run]` | Install from a fetched directory | yes |
 
-`doctor` exits 0 when healthy or merely warned, 1 when something is broken — so it
-works as a CI or boot check. `--version`, `doctor --json` and the exact command
-you ran are the three things worth pasting into a bug report. `--probe` is opt-in because it is the one command
+`doctor` works as a CI or boot check. The exit codes are a contract:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | healthy, or warnings only |
+| 1 | something is broken, or the scanner needs a bundle this tool cannot supply |
+| 2 | usage or permission problem: bad argument, missing directory, no root where writing is needed |
+
+`--version`, `doctor --json` and the exact command you ran are the three things
+worth pasting into a bug report. `--probe` is opt-in because it is the one command
 that touches hardware: it makes the scan head move.
 
 ## How detection works
