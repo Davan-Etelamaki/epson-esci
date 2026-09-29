@@ -36,6 +36,7 @@ $ ./epson-esci detect
 - [Troubleshooting](#troubleshooting)
 - [Supporting another model](#supporting-another-model)
 - [Tests](#tests)
+- [Removing it](#removing-it)
 - [Redistribution and licensing](#redistribution-and-licensing)
 - [Tested against](#tested-against)
 
@@ -340,6 +341,45 @@ Every data path is overridable so fixtures can be used at all:
 The suite is checked against deliberate regressions — a corrupted checksum, a
 firmware conflict promoted to a hard failure, a broken derivation — and it fails
 on each. A suite that cannot fail is not evidence.
+
+## Removing it
+
+Nothing uninstalls automatically — these are proprietary packages you chose to
+install, and taking them off is worth deciding on purpose.
+
+```bash
+sudo apt remove iscan iscan-data iscan-plugin-gt-s650
+sudo dpkg -r libsane       # the transitional shim 'install' built. It exists only
+                           # in dpkg's own status and in no repository, so apt
+                           # will not offer to remove it.
+sudo rm /etc/udev/rules.d/60-iscan.rules
+sudo udevadm control --reload-rules
+rm -rf ~/epson-esci-cache  # EPSON-licensed downloads
+```
+
+Do **not** remove `libsane1`. It is a distribution package other software uses;
+the shim depends on it, not the other way round.
+
+`apt remove` takes the plugin's own copy of `esfw010c.bin` with it — that file is
+owned by `iscan-plugin-gt-s650` — but leaves behind everything this tool created:
+
+```bash
+ls /usr/share/iscan/       # *.before-epson-esci and *.bak outlive the uninstall
+```
+
+The interpreter registry is not cleaned either. `grep 04b8
+/var/lib/iscan/interpreter` should print nothing. If a line is left, pass the
+spec as separate arguments exactly as the file shows it — the leading word
+`interpreter` is part of the spec, and quoting the whole line as one argument
+fails with `not enough parameters`:
+
+```bash
+sudo iscan-registry -r interpreter usb 0x04b8 0x013d \\
+     /usr/lib/iscan/libiscan-plugin-gt-s650 /usr/share/iscan/esfw010c.bin
+```
+
+With the plugin gone the scanner goes back to looking dead: blinking LED, nothing
+in `scanimage -L`. That is the correct end state, not a failed uninstall.
 
 ## Redistribution and licensing
 
