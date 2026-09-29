@@ -769,6 +769,15 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_firmware(args) -> int:
+    if getattr(args, "repair", False) and not getattr(args, "frm", None):
+        # os.walk(None) otherwise raises TypeError on a perfectly ordinary
+        # typo, which reads like a crash in the tool rather than a missing flag.
+        print("firmware --repair needs --from <dir> with a fetched bundle in it",
+              file=sys.stderr)
+        print("  epson-esci fetch --dest ~/epson-esci-cache", file=sys.stderr)
+        print("  epson-esci firmware --repair --from ~/epson-esci-cache",
+              file=sys.stderr)
+        return 2
     rows = interpreter_lines()
     if not rows:
         print("no interpreter registry at %s" % INTERPRETER_DB, file=sys.stderr)
@@ -925,17 +934,35 @@ def device_families():
                     if extra not in [w[0] for w in wanted]:
                         wanted.append((extra, FIRMWARE_SOURCES[extra]))
             elif fam in NO_BUNDLE:
-                gaps.append((fam, "EPSON publishes no Linux bundle for it"))
+                if fam not in [g[0] for g in gaps]:
+                    gaps.append((fam, "EPSON publishes no Linux bundle for it"))
             else:
-                gaps.append((fam, "family is not in the table of known bundles"))
+                # A family newer than this table, or one whose bundle moved.
+                # Report it as a gap rather than pretending the scanner needs
+                # nothing -- silence here would look like "already handled".
+                if fam not in [g[0] for g in gaps]:
+                    gaps.append((fam, "no verified bundle recorded yet; see"
+                                 " 'Supporting another model' in the README"))
     return wanted, gaps
+
+
+def gap_help() -> None:
+    """What a family with no bundle actually means, said the same way twice."""
+    print("", file=sys.stderr)
+    print("This tool cannot download that one. Two ways forward:", file=sys.stderr)
+    print("  * your distribution may still package it; search for iscan-plugin-*",
+          file=sys.stderr)
+    print("  * doctor, explain and reset still work without it; only fetch and"
+          " install need the bundle", file=sys.stderr)
 
 
 def cmd_fetch(args) -> int:
     if args.only:
         names = list(args.only)
     elif args.all:
-        names = list(BUNDLES)
+        # Include the epsonscan2 source: for the families whose blob collides,
+        # it is the only one carrying a build confirmed to work.
+        names = list(BUNDLES) + list(FIRMWARE_SOURCES)
     else:
         wanted, gaps = device_families()
         if wanted:
@@ -944,18 +971,22 @@ def cmd_fetch(args) -> int:
         elif gaps:
             for fam, why in gaps:
                 print("iscan-plugin-%s: %s" % (fam, why), file=sys.stderr)
-            print("", file=sys.stderr)
-            print("This tool cannot download that one. Two ways forward:", file=sys.stderr)
-            print("  * your distribution may still package it; search for iscan-plugin-*",
-                  file=sys.stderr)
-            print("  * doctor, explain and reset still work without it; only fetch and",
-                  " install need the bundle", file=sys.stderr)
+            gap_help()
             return 1
         else:
             print("no EPSON scanner attached. Name a family with --only, or use --all.",
                   file=sys.stderr)
             print("known: " + ", ".join(sorted(BUNDLES)), file=sys.stderr)
             return 2
+
+    # Named explicitly but unobtainable: give the reason, not a usage error.
+    unavailable = [n for n in names if n in NO_BUNDLE]
+    if unavailable:
+        for n in unavailable:
+            print("iscan-plugin-%s: EPSON publishes no Linux bundle for it" % n,
+                  file=sys.stderr)
+        gap_help()
+        return 1
 
     unknown = [n for n in names if n not in BUNDLES and n not in FIRMWARE_SOURCES]
     if unknown:
@@ -1118,9 +1149,9 @@ def main() -> int:
 
     s = sub.add_parser("fetch", help="download and verify EPSON bundles")
     s.add_argument("--dest", default="~/epson-esci-cache")
-    s.add_argument("--only", action="append",
-                   choices=sorted(list(BUNDLES) + list(FIRMWARE_SOURCES)),
-                   help="what to fetch; default is whatever the attached scanner needs")
+    s.add_argument("--only", action="append", metavar="FAMILY",
+                   help="what to fetch, e.g. gt-s650; default is whatever the"
+                        " attached scanner needs")
     s.add_argument("--all", action="store_true", help="fetch every known family")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(func=cmd_fetch)

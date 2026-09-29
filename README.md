@@ -10,8 +10,9 @@ they look physically dead: the LED blinks forever and no scanner API can talk to
 them.
 
 The tool reads SANE's own device databases to work out what any attached EPSON
-scanner needs, so the **diagnosis** covers all 594 models in `epkowa.desc`. The
-**automated fix** covers 13 of the 19 plugin families — see
+scanner needs, so the **diagnosis** covers every USB scanner in `epkowa.desc` —
+539 model names across 203 USB ids. The **automated fix** covers 13 of the 19
+plugin families — see
 [Scope](#scope-what-works-for-which-models). It ships no EPSON binaries — see
 [Redistribution](#redistribution-and-licensing).
 
@@ -74,14 +75,18 @@ Measured, not aspirational:
 
 | Commands | Coverage |
 | --- | --- |
-| `detect`, `explain`, `doctor`, `reset` | all 594 models in `epkowa.desc` — read from your system at run time |
+| `detect`, `explain`, `doctor`, `reset` | all 539 USB models in `epkowa.desc` (203 ids) — read from your system at run time |
 | `fetch`, `install` | **13 of the 19 plugin families** — 9 as `.deb`, 4 as rpm only |
 | `firmware` | names the source package for 7 families; gives a verdict only where a human has confirmed one |
 
-Worth knowing before you decide this tool is for you: **545 of those 594 models
-need no plugin at all** — open-source SANE handles them, and you want
-`sane-airscan` or the `epsonds` backend instead. This exists for the awkward 49
-that need a non-free interpreter and look physically dead without one.
+Worth knowing before you decide this tool is for you: **490 of those 539 need no
+plugin at all** — open-source SANE handles them, and you want `sane-airscan` or
+the `epsonds` backend instead. This exists for the 49 that need a non-free
+interpreter and look physically dead without one.
+
+(The file describes 594 model entries; 55 of them name no USB id — SCSI and
+IEEE1394 only — so they are outside anything a USB scan can reach, and this tool
+does not claim them.)
 
 The 13 families `fetch` can install:
 

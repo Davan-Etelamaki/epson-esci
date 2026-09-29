@@ -77,6 +77,8 @@ def build_fixture(root, esci):
     mkdev(sysfs, "2.4.4.2", "04b8", "0720", 9, 102, "EPSON GT-7200")
     mkdev(sysfs, "2.4.4.3", "04b8", "0721", 9, 103, "EPSON GT-S600")
 
+    mkdev(sysfs, "2.4.4.4", "04b8", "0722", 9, 104, "EPSON GT-ZZZ")
+
     gapfs = os.path.join(root, "gap", "usb9", "b", "c")
     mkdev(gapfs, "2.4.4.2", "04b8", "0720", 9, 102, "EPSON GT-7200")
 
@@ -88,6 +90,7 @@ def build_fixture(root, esci):
         ("GT-7200", "0x0720", "good", "requires DFSG non-free iscan-plugin-gt-7200"),
         ("GT-S600", "0x0721", "good", "requires DFSG non-free iscan-plugin-gt-s600"),
         ("Perfection 4990 PHOTO", "0x012a", "complete", "US version of the GT-X800"),
+        ("GT-ZZZ", "0x0722", "good", "requires DFSG non-free iscan-plugin-gt-zzz"),
     ]:
         lines += desc_block(m, "0x04b8", p, s, c)
     desc = os.path.join(root, "epkowa.desc")
@@ -229,7 +232,7 @@ def test_firmware(esci, fx):
 def test_devices(esci, fx):
     print("[4] device discovery and requirements")
     devs = esci.find_epson_devices()
-    check("all fixture devices found", len(devs) == 3, str(len(devs)))
+    check("all fixture devices found", len(devs) == 4, str(len(devs)))
     v39 = [d for d in devs if d["product"] == "013d"][0]
     check("model names resolved", "Perfection V39" in v39["models"], str(v39["models"]))
     check("plugin resolved", v39["plugins"] == ["iscan-plugin-gt-s650"], str(v39["plugins"]))
@@ -254,6 +257,10 @@ def test_devices(esci, fx):
     check("rpm family also mapped", "gt-s600" in names, str(names))
     check("unavailable family reported as a gap",
           any(g[0] == "gt-7200" for g in gaps), str(gaps))
+    check("a family newer than the table is a gap, not silence",
+          any(g[0] == "gt-zzz" for g in gaps), str(gaps))
+    check("gap count has no duplicates", len(gaps) == len(set(g[0] for g in gaps)),
+          str(gaps))
 
 
 def test_cli(esci, fx):
@@ -297,6 +304,15 @@ def test_cli(esci, fx):
     check("an empty cache points at fetch", rc == 2 and "fetch" in out, out[:200])
     rc, out = run_cli(["--version"], env)
     check("version is reported for bug reports", rc == 0 and "epson-esci" in out, out[:80])
+    rc, out = run_cli(["firmware", "--repair"], env)
+    check("--repair without --from is a clean error, not a traceback",
+          rc == 2 and "Traceback" not in out and "--from" in out, out[:200])
+    rc, out = run_cli(["fetch", "--only", "gt-7200", "--dry-run"], env)
+    check("a named but unobtainable family gets the reason, not a usage error",
+          rc == 1 and "cannot download" in out and "invalid choice" not in out,
+          out[:200])
+    rc, out = run_cli(["fetch", "--only", "no-such-family"], env)
+    check("a made-up family lists what exists", rc == 2 and "known:" in out, out[:200])
     rc, out = run_cli(["fetch", "--only", "nosuch"], env)
     check("unknown family rejected", rc == 2, str(rc))
     gap = dict(env)

@@ -31,7 +31,7 @@ on the author's V39 has not been proven to work at all.
 
 ## Adding a model
 
-Diagnosis already covers all 594 models in `epkowa.desc`; there is no model list
+Diagnosis already covers every USB model in `epkowa.desc`; there is no model list
 to extend. To add fetch/install for a plugin family, add a `BUNDLES` entry whose
 `sha256` **you** verified by downloading that exact URL and hashing it. Copying
 a hash out of someone else's recipe is not verification. If the family ships an
