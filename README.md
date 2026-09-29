@@ -109,6 +109,7 @@ need the bundle.
 ## Quick start
 
 ```bash
+curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/main/epson-esci
 chmod +x epson-esci            # one file, stdlib only; or: sudo make install
 
 ./epson-esci doctor            # what is wrong, and what fixes it
@@ -404,6 +405,9 @@ and its preamble defines "Software" as including "any related documentation,
 **firmware**, or updates". The only permitted transfer requires handing over "the
 Epson Hardware" too. `iscan-plugin-gt-s650` states outright: "The original source
 is non-free and can not be made available."
+
+The tool itself is MIT, and that licence covers only the tool: this repository
+holds no EPSON code for it to apply to.
 
 So this tool ships **URLs and checksums only**, exactly as AUR package recipes do,
 and for the same reason: each user downloads from EPSON and accepts EPSON's licence
