@@ -1,0 +1,852 @@
+#!/usr/bin/env python3
+"""epson-esci -- make EPSON ESC-I "unsupported" flatbed scanners work on Linux.
+
+Targets the class of EPSON scanners that SANE's open-source backends (epson,
+epson2, epsonds) will never claim, and that instead need EPSON's proprietary
+epkowa backend plus a non-free interpreter plugin, and that receive their
+operating firmware from the host at run time. The Perfection V19/V39, GT-S650,
+Perfection V37/V370, GT-F500/F600 and friends all behave this way.
+
+Symptoms of this class:
+  * The scanner "does not turn on": the LED blinks forever and never goes steady.
+  * scanimage -L lists nothing, or only network scanners.
+  * sane-find-scanner sees it as root but says "Access denied" as a user.
+  * scanimage -d <device> fails with "sane_start: Invalid argument".
+  * scanimage -d <device> fails with "Error during device I/O".
+
+Commands:
+  detect     List EPSON scanners attached, and what each one needs.
+  explain    Print the full requirement chain for a USB id (default: attached).
+  doctor     Run every check and print a verdict. Exit non-zero on problems.
+  firmware   Check -- and with --repair, fix -- interpreter firmware collisions.
+  reset      USB-reset a wedged scanner and print its new device name.
+  fetch      Download EPSON bundles and verify checksums. Installs nothing.
+  install    Install from a fetched directory. --dry-run prints the plan.
+
+Everything is read-only except reset, firmware --repair and install.
+
+Redistribution note: this script contains only URLs and checksums. It never
+ships EPSON binaries, because EPSON's end-user licence forbids distributing
+them (see README.md). Each user downloads from EPSON and accepts that licence.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.request
+
+USBDEVFS_RESET = 0x5514  # _IO('U', 20)
+SYSFS_USB = "/sys/bus/usb/devices"
+EPSON_VENDOR = "04b8"
+# dpkg-query version format, assembled at runtime so this stays a literal.
+DPKG_VER = "$" + "{Version}"
+
+EPKOWA_DESC = "/usr/share/iscan-data/epkowa.desc"
+INTERPRETER_DB = "/var/lib/iscan/interpreter"
+SANE_BACKENDS_HTML = "/usr/share/doc/libsane-common/sane-backends.html"
+UDEV_RULES_DIRS = ("/etc/udev/rules.d", "/lib/udev/rules.d", "/usr/lib/udev/rules.d")
+SANE_CONFIG_DIR = "/etc/sane.d"
+
+# Bundles this tool knows how to fetch and verify. Adding a plugin here means
+# recording the checksums of EPSON's own bits; the AUR PKGBUILDs are a good
+# independent source for those values.
+BUNDLES = {
+    "iscan-gt-s650": {
+        "url": ("https://download2.ebz.epson.net/iscan/plugin/gt-s650/deb/x64/"
+                "iscan-gt-s650-bundle-2.30.4.x64.deb.tar.gz"),
+        "sha256": "553eb55fef42ebcae562f3b8442d43093a16d8b53893da3b0d25396e81377949",
+        "provides": ["iscan", "iscan-data", "iscan-plugin-gt-s650"],
+        "purpose": "epkowa backend, device data, and the gt-s650 interpreter plugin",
+    },
+    "epsonscan2-6.6.2.5": {
+        "url": ("https://download2.ebz.epson.net/epsonscan2/common/deb/x64/"
+                "epsonscan2-bundle-6.6.2.5.x86_64.deb.tar.gz"),
+        "sha512": ("6f777e1f3c90693611078fa8bb942744271c8c7dcfc44d9a2eda9f14e5cd1c07"
+                   "c407593ca2aeb5ad30e6e96a0f8b144e10613907c4fcf4e649dc2198e7079ec9"),
+        "provides": ["epsonscan2-non-free-plugin"],
+        "purpose": "source of the working esfw010c.bin for Perfection V39 board rev J371A",
+    },
+}
+
+# Some firmware blobs ship under the same filename with different contents, and
+# one build can be broken for a specific board revision while working for others.
+# sha1 of the blob -> note.
+FIRMWARE_DB = {
+    "esfw010c.bin": {
+        "bad": {
+            "bd30c27113b06e957c63891fb6c10ca7a80034ee":
+                "shipped by iscan-plugin-gt-s650 1.1.1; causes 'sane_start: Invalid "
+                "argument' on Perfection V39 board rev J371A",
+        },
+        "good": {
+            "997f953d3e9373aa515c92bd3025d6a3ac22b8e5":
+                "shipped by epsonscan2-non-free-plugin 1.0.0.5 (bundle 6.6.2.5); "
+                "confirmed working on J371A",
+        },
+        "unknown": {
+            "48a29638abec6ed431b4c486ceae35ee244d8555":
+                "shipped by epsonscan2-non-free-plugin 1.0.0.6 (bundle 6.7.65.0); "
+                "not verified on J371A",
+        },
+    },
+}
+
+OK, WARN, FAIL, INFO = "PASS", "WARN", "FAIL", "INFO"
+
+
+# --------------------------------------------------------------------------- io
+
+
+def read_text(path: str, default: str = "") -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return default
+
+
+def read_int(path: str, default=None):
+    try:
+        with open(path) as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return default
+
+
+def digest(path: str, algo: str) -> str:
+    h = hashlib.new(algo)
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def exists(path: str) -> bool:
+    return os.path.exists(path) or os.path.islink(path)
+
+
+def norm_id(value) -> str:
+    """Normalise a USB id.
+
+    The sources disagree on format: sysfs says '04b8', epkowa.desc and the
+    interpreter registry say '0x04b8', and SANE's docs say '0x04b8/0x013d'.
+    Everything is compared in the bare lower-case form.
+    """
+    v = str(value or "").strip().lower()
+    return v[2:] if v.startswith("0x") else v
+
+
+def run(argv, dry: bool = False):
+    """Run a command, or just print it when dry is set."""
+    if dry:
+        print("  would run: " + " ".join(argv))
+        return 0
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout + proc.stderr)
+    return proc.returncode
+
+
+# ------------------------------------------------------------------ epkowa.desc
+
+
+def parse_epkowa_desc(path: str = EPKOWA_DESC) -> dict:
+    """Group epkowa.desc entries by USB id.
+
+    Returns {(vendor, product): [{model, interface, status, comment}, ...]}.
+    One USB id usually maps to several marketing names for the same silicon --
+    04b8:013d is both "GT-S650" and "Perfection V39".
+    """
+    text = read_text(path)
+    if not text:
+        return {}
+
+    by_usbid: dict = {}
+    cur: dict = {}
+
+    def flush():
+        if cur and cur.get("usbid"):
+            by_usbid.setdefault(cur["usbid"], []).append(
+                {k: cur.get(k) for k in ("model", "interface", "status", "comment")}
+            )
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            flush()
+            cur = {}
+            continue
+        m = re.match(r':(\w+)\s+"([^"]*)"', line)
+        if m:
+            key = m.group(1)
+            if key == "usbid":
+                parts = re.findall(r'"([^"]*)"', line)
+                if len(parts) >= 2:
+                    cur["usbid"] = (norm_id(parts[0]), norm_id(parts[1]))
+            else:
+                cur[key] = m.group(2)
+            continue
+        m = re.match(r":(\w+)\s+:(\w+)", line)
+        if m:
+            cur[m.group(1)] = m.group(2)
+    flush()
+    return by_usbid
+
+
+def plugin_from_comment(comment) -> str | None:
+    if not comment:
+        return None
+    m = re.search(r"iscan-plugin-[a-z0-9][a-z0-9-]*", comment)
+    return m.group(0) if m else None
+
+
+def sane_open_source_status(vendor: str, product: str):
+    """Ask SANE's own shipped docs whether an open-source backend covers a USB id.
+
+    Reads the EPSON table out of sane-backends.html -- the same table that says
+    "Unsupported / supported by the epkowa backend plus non-free interpreter".
+    Returns (status, comment), or None when those docs are not installed.
+    """
+    text = read_text(SANE_BACKENDS_HTML)
+    if not text:
+        return None
+    plain = re.sub(r"<[^>]+>", "|", text).replace("&nbsp;", " ").replace("&quot;", '"')
+    tokens = [t.strip() for t in plain.split("|")]
+    # The docs spell ids "0x04b8/0x013d"; accept either spelling.
+    needles = {("%s/%s" % (vendor, product)).lower(),
+               ("0x%s/0x%s" % (norm_id(vendor), norm_id(product))).lower()}
+    statuses = {"complete", "good", "partial", "unsupported", "untested"}
+    for i, tok in enumerate(tokens):
+        if tok.lower() not in needles:
+            continue
+        for j in range(i + 1, min(i + 8, len(tokens))):
+            if tokens[j].lower() in statuses:
+                comment = ""
+                for k in range(j + 1, min(j + 4, len(tokens))):
+                    if tokens[k]:
+                        comment = tokens[k]
+                        break
+                return tokens[j], comment
+    return None
+
+
+# ------------------------------------------------------------------ sysfs probe
+
+
+def hub_chain(sysfs: str):
+    """Return (hop_count, chain) describing the hub path to a device."""
+    parts = os.path.realpath(sysfs).split("/")
+    for i, part in enumerate(parts):
+        if re.fullmatch(r"usb\d+", part):
+            return len(parts[i + 1:-1]), "->".join(parts[i:])
+    return 0, os.path.basename(sysfs)
+
+
+def locate(vendor: str, product: str = ""):
+    """Find an attached device by USB id. Returns (bus, dev, sysfs) or None."""
+    if not exists(SYSFS_USB):
+        return None
+    for name in sorted(os.listdir(SYSFS_USB)):
+        path = os.path.join(SYSFS_USB, name)
+        if norm_id(read_text(os.path.join(path, "idVendor"))) != norm_id(vendor):
+            continue
+        if product and norm_id(read_text(os.path.join(path, "idProduct"))) != norm_id(product):
+            continue
+        bus, dev = read_int(os.path.join(path, "busnum")), read_int(os.path.join(path, "devnum"))
+        if bus and dev:
+            return bus, dev, path
+    return None
+
+
+def find_epson_devices() -> list:
+    """Every EPSON USB device currently attached, with what it needs."""
+    by_usbid = parse_epkowa_desc()
+    out = []
+    if exists(SYSFS_USB):
+        for name in sorted(os.listdir(SYSFS_USB)):
+            path = os.path.join(SYSFS_USB, name)
+            if read_text(os.path.join(path, "idVendor")).strip() != EPSON_VENDOR:
+                continue
+            product = read_text(os.path.join(path, "idProduct")).strip()
+            busnum = read_int(os.path.join(path, "busnum"))
+            devnum = read_int(os.path.join(path, "devnum"))
+            if busnum is None or devnum is None:
+                continue
+            hops, chain = hub_chain(path)
+            entries = by_usbid.get((norm_id(EPSON_VENDOR), norm_id(product)), [])
+            models = sorted({e["model"] for e in entries if e.get("model")})
+            statuses = sorted({e["status"] for e in entries if e.get("status")})
+            plugins = sorted({p for e in entries
+                              if (p := plugin_from_comment(e.get("comment")))})
+            doc = sane_open_source_status(EPSON_VENDOR, product)
+            out.append({
+                "vendor": EPSON_VENDOR,
+                "product": product,
+                "product_string": read_text(os.path.join(path, "product")).strip(),
+                "busnum": busnum,
+                "devnum": devnum,
+                "sysfs": path,
+                "bmaxpower": read_text(os.path.join(path, "bMaxPower")).strip(),
+                "speed": read_text(os.path.join(path, "speed")).strip(),
+                "hub_hops": hops,
+                "hub_chain": chain,
+                "node": "/dev/bus/usb/%03d/%03d" % (busnum, devnum),
+                "models": models,
+                "epkowa_status": statuses,
+                "plugins": plugins,
+                "sane_doc": list(doc) if doc else None,
+            })
+    return out
+
+
+# ------------------------------------------------------------------- epkowaness
+
+
+def interpreter_lines() -> list:
+    """Parsed /var/lib/iscan/interpreter: the registry that makes these scanners live."""
+    rows = []
+    for line in read_text(INTERPRETER_DB).splitlines():
+        parts = line.split()
+        if len(parts) >= 6 and parts[0] == "interpreter":
+            rows.append({"interface": parts[1], "vendor": norm_id(parts[2]),
+                         "product": norm_id(parts[3]),
+                         "plugin": parts[4], "firmware": parts[5]})
+    return rows
+
+
+def active_backends() -> list:
+    active = []
+    for line in read_text(os.path.join(SANE_CONFIG_DIR, "dll.conf")).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            active.append(line)
+    dll_d = os.path.join(SANE_CONFIG_DIR, "dll.d")
+    if exists(dll_d):
+        for fn in sorted(os.listdir(dll_d)):
+            for line in read_text(os.path.join(dll_d, fn)).splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    active.append(line)
+    return active
+
+
+def network_discovery_backends() -> list:
+    """Backends doing mDNS/avahi discovery, which delays device listing."""
+    hits = []
+    if exists(SANE_CONFIG_DIR):
+        for fn in sorted(os.listdir(SANE_CONFIG_DIR)):
+            if fn.endswith(".conf") and "net autodiscovery" in read_text(
+                    os.path.join(SANE_CONFIG_DIR, fn)):
+                hits.append(fn[:-5])
+    return hits
+
+
+def udev_rule_for(vendor: str, product: str) -> str | None:
+    for d in UDEV_RULES_DIRS:
+        if not exists(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            body = read_text(os.path.join(d, fn))
+            if ('"%s"' % norm_id(product)) in body and any(
+                    k in body for k in ("iscan", "sane", "scanner")):
+                return os.path.join(d, fn)
+    return None
+
+
+def firmware_state(path: str, basename: str):
+    """Classify a firmware blob against FIRMWARE_DB. Returns (level, note)."""
+    if not exists(path):
+        return FAIL, "missing"
+    sha1 = digest(path, "sha1")
+    table = FIRMWARE_DB.get(basename)
+    if not table:
+        return INFO, "sha1 " + sha1 + " (no reference data for this blob)"
+    for key, level in (("bad", FAIL), ("good", OK), ("unknown", WARN)):
+        note = table.get(key, {}).get(sha1)
+        if note:
+            return level, "sha1 " + sha1 + " -- " + note
+    return WARN, "sha1 " + sha1 + " -- unrecognised build, in neither the good nor bad list"
+
+
+# ----------------------------------------------------------------------- checks
+
+
+def checks_for(dev: dict) -> list:
+    """Every check for one device: (level, title, detail, fix)."""
+    out = []
+    vendor, product = dev["vendor"], dev["product"]
+
+    doc = dev["sane_doc"]
+    if doc and doc[0].lower() == "unsupported":
+        out.append((INFO, "open-source SANE support", doc[0] + " -- " + doc[1],
+                    "expected; this is why epkowa is required"))
+    elif doc:
+        out.append((OK, "open-source SANE support", doc[0] + " -- " + doc[1], ""))
+    else:
+        out.append((WARN, "open-source SANE support",
+                    "could not read " + SANE_BACKENDS_HTML,
+                    "install libsane-common, or check the SANE supported-devices list"))
+
+    if not exists(EPKOWA_DESC):
+        out.append((FAIL, "epkowa backend",
+                    EPKOWA_DESC + " not found -- iscan/iscan-data not installed",
+                    "run: epson-esci fetch && epson-esci install --from <dir>"))
+        return out
+    out.append((OK, "epkowa backend", "iscan-data device database present", ""))
+
+    if "epkowa" in active_backends():
+        out.append((OK, "epkowa enabled", "listed in dll.conf or dll.d/", ""))
+    else:
+        out.append((FAIL, "epkowa enabled", "not enabled for the SANE core library",
+                    "add a line 'epkowa' to /etc/sane.d/dll.d/iscan"))
+
+    rows = [r for r in interpreter_lines()
+            if r["vendor"] == vendor and r["product"] == product]
+    if not rows:
+        out.append((FAIL, "interpreter registration",
+                    "no 'interpreter usb %s %s' line in %s" % (vendor, product, INTERPRETER_DB),
+                    "this is why the scanner looks dead. run: sudo iscan-registry -a "
+                    "(or reinstall the plugin package)"))
+        return out
+    reg = rows[0]
+    out.append((OK, "interpreter registration",
+                reg["plugin"] + " + " + os.path.basename(reg["firmware"]), ""))
+
+    if exists(reg["plugin"] + ".so") or exists(reg["plugin"]):
+        out.append((OK, "interpreter plugin", reg["plugin"] + ".so", ""))
+    else:
+        out.append((FAIL, "interpreter plugin", reg["plugin"] + ".so missing",
+                    "install the plugin package named by epkowa.desc"))
+
+    level, note = firmware_state(reg["firmware"], os.path.basename(reg["firmware"]))
+    out.append((level, "interpreter firmware", note,
+                "run: epson-esci firmware --repair --from <fetched dir>"
+                if level == FAIL else ""))
+
+    node = dev["node"]
+    if not exists(node):
+        out.append((WARN, "device node", node + " not present", "replug the scanner"))
+    else:
+        mode = oct(os.stat(node).st_mode & 0o777)
+        if os.geteuid() == 0:
+            out.append((INFO, "device permissions",
+                        "%s mode %s (running as root: an access check here proves nothing)"
+                        % (node, mode),
+                        "re-run this command as your normal user"))
+        elif os.access(node, os.R_OK | os.W_OK):
+            out.append((OK, "device permissions",
+                        "%s mode %s, writable by you" % (node, mode), ""))
+        else:
+            rule = udev_rule_for(vendor, product)
+            hint = ("udev rule %s exists but did not take effect; reload with "
+                    "sudo udevadm control --reload-rules && sudo udevadm trigger" % rule
+                    if rule else
+                    "no udev rule matches this id; install EPSON's 60-iscan.rules, which "
+                    "is shipped in the bundle root and by no .deb -- see README")
+            out.append((FAIL, "device permissions",
+                        "%s mode %s is not writable by uid %d" % (node, mode, os.getuid()),
+                        hint))
+
+    if dev["hub_hops"] >= 2:
+        out.append((WARN, "USB topology",
+                    "behind %d hub hops (%s), declares %s"
+                    % (dev["hub_hops"], dev["hub_chain"], dev["bmaxpower"]),
+                    "plug into a direct motherboard port or a self-powered hub; cascaded "
+                    "unpowered hubs are the usual cause of wedging"))
+    else:
+        out.append((OK, "USB topology",
+                    "%d hub hop(s) (%s), declares %s"
+                    % (dev["hub_hops"], dev["hub_chain"], dev["bmaxpower"]), ""))
+
+    backends = network_discovery_backends()
+    if backends:
+        out.append((INFO, "device listing latency",
+                    "mDNS/avahi discovery enabled in: " + ", ".join(backends),
+                    "GUIs show an empty scanner list for several seconds; delete the "
+                    "'net autodiscovery' lines if you never scan over the network"))
+    return out
+
+
+def device_line(dev: dict) -> str:
+    models = ", ".join(dev["models"]) or dev["product_string"] or "unknown model"
+    plugins = ", ".join(dev["plugins"]) or "none"
+    return ("%s:%s  bus %03d dev %03d  %s  [plugin: %s]"
+            % (dev["vendor"], dev["product"], dev["busnum"], dev["devnum"], models, plugins))
+
+
+# --------------------------------------------------------------------- commands
+
+
+def cmd_detect(args) -> int:
+    devs = find_epson_devices()
+    if args.json:
+        print(json.dumps(devs, indent=2))
+        return 0 if devs else 1
+    if not devs:
+        print("no EPSON (%s) USB devices attached" % EPSON_VENDOR)
+        return 1
+    for dev in devs:
+        print(device_line(dev))
+        if dev["sane_doc"]:
+            print("    open-source SANE: %s -- %s" % (dev["sane_doc"][0], dev["sane_doc"][1]))
+    return 0
+
+
+def cmd_explain(args) -> int:
+    if args.usbid:
+        vendor, _, product = args.usbid.partition(":")
+        entries = parse_epkowa_desc().get((norm_id(vendor), norm_id(product)), [])
+        if not entries:
+            print("%s is not in %s" % (args.usbid, EPKOWA_DESC), file=sys.stderr)
+            print("is iscan-data installed?", file=sys.stderr)
+            return 1
+        print(args.usbid)
+        for e in entries:
+            print("  model   %s" % e["model"])
+            print("  status  %s   interface %s" % (e["status"], e["interface"]))
+            print("  plugin  %s" % (plugin_from_comment(e.get("comment")) or "none named"))
+            if e.get("comment"):
+                print("  note    %s" % e["comment"])
+        doc = sane_open_source_status(vendor, product)
+        if doc:
+            print("  open-source SANE says: %s -- %s" % doc)
+        return 0
+
+    devs = find_epson_devices()
+    if not devs:
+        print("no EPSON device attached; pass a USB id, e.g. epson-esci explain 04b8:013d",
+              file=sys.stderr)
+        return 1
+    for dev in devs:
+        print(device_line(dev))
+        for level, title, detail, fix in checks_for(dev):
+            print("  [%s] %s: %s" % (level, title, detail))
+            if fix:
+                print("         fix: %s" % fix)
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    devs = find_epson_devices()
+    if not devs:
+        print("doctor: no EPSON (%s) USB device attached" % EPSON_VENDOR, file=sys.stderr)
+        return 1
+    rank = {OK: 0, INFO: 0, WARN: 1, FAIL: 2}
+    report, worst = {}, 0
+    for dev in devs:
+        rows = checks_for(dev)
+        report["%s:%s" % (dev["vendor"], dev["product"])] = rows
+        worst = max(worst, max((rank[l] for l, _, _, _ in rows), default=0))
+        if not args.json:
+            print(device_line(dev))
+            for level, title, detail, fix in rows:
+                print("  [%s] %s: %s" % (level, title, detail))
+                if fix:
+                    print("         fix: %s" % fix)
+            print()
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 1 if worst >= 2 else 0
+    print("verdict: " + {0: "healthy", 1: "working, with warnings", 2: "broken"}[worst])
+    if worst == 0:
+        print("scan with:  scanimage -L   (then wait a few seconds for the list)")
+    return 1 if worst >= 2 else 0
+
+
+def cmd_firmware(args) -> int:
+    rows = interpreter_lines()
+    if not rows:
+        print("no interpreter registry at %s" % INTERPRETER_DB, file=sys.stderr)
+        return 1
+    rc = 0
+    for row in rows:
+        base = os.path.basename(row["firmware"])
+        level, note = firmware_state(row["firmware"], base)
+        print("[%s] %s:%s  %s: %s" % (level, row["vendor"], row["product"], base, note))
+        if level == FAIL:
+            rc = 1
+    if not args.repair:
+        print("\nnothing changed; add --repair --from <fetched dir> to replace a bad blob")
+        return rc
+
+    candidates = []
+    for root, _, files in os.walk(args.frm):
+        for fn in files:
+            if fn in FIRMWARE_DB:
+                candidates.append(os.path.join(root, fn))
+    if not candidates:
+        print("no known firmware blobs found under %s" % args.frm, file=sys.stderr)
+        return 2
+
+    for row in rows:
+        base = os.path.basename(row["firmware"])
+        level, _ = firmware_state(row["firmware"], base)
+        if level == OK:
+            continue
+        good = FIRMWARE_DB.get(base, {}).get("good", {})
+        match = next((c for c in candidates if digest(c, "sha1") in good), None)
+        if match is None:
+            print("no known-good copy of %s under %s" % (base, args.frm), file=sys.stderr)
+            continue
+        if os.geteuid() != 0 and not os.access(os.path.dirname(row["firmware"]), os.W_OK):
+            print("need root to write %s" % row["firmware"], file=sys.stderr)
+            return 2
+        backup = row["firmware"] + ".before-epson-esci"
+        if not exists(backup):
+            shutil.copy2(row["firmware"], backup)
+        cmd = ["sudo", "cp", match, row["firmware"]] if os.geteuid() != 0 else ["cp", match, row["firmware"]]
+        run(cmd)
+        new_level, new_note = firmware_state(row["firmware"], base)
+        print("[%s] replaced %s from %s (backup: %s)" % (new_level, row["firmware"], match, backup))
+        print("         " + new_note)
+        if new_level != OK:
+            rc = 1
+    return rc
+
+
+def cmd_reset(args) -> int:
+    vendor, _, product = args.usbid.partition(":")
+    vendor, product = vendor.lower(), product.lower()
+
+    found = locate(vendor, product)
+    if found is None:
+        print("no USB device %s:%s present" % (vendor, product or "*"), file=sys.stderr)
+        return 1
+    bus, dev, _ = found
+    node = "/dev/bus/usb/%03d/%03d" % (bus, dev)
+
+    try:
+        fd = os.open(node, os.O_WRONLY)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            print("%s: permission denied -- run with sudo" % node, file=sys.stderr)
+            return 2
+        raise
+    try:
+        fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+        err = None
+    except OSError as exc:
+        # ENODEV usually means the reset worked and the device re-enumerated
+        # out from under the old handle.
+        err = None if exc.errno == errno.ENODEV else exc
+    finally:
+        os.close(fd)
+    if err is not None:
+        print("reset of %s failed: %s" % (node, err), file=sys.stderr)
+        return 3
+
+    deadline = time.monotonic() + args.timeout
+    again = None
+    while time.monotonic() < deadline:
+        again = locate(vendor, product)
+        if again:
+            time.sleep(2.0)  # let udev apply its rules to the new node
+            again = locate(vendor, product) or again
+            break
+        time.sleep(0.5)
+    if again is None:
+        print("device did not reappear within %.0fs; power-cycle it (unplug USB, "
+              "wait 10s, replug)" % args.timeout, file=sys.stderr)
+        return 4
+
+    nbus, ndev, npath = again
+    ctrl = read_text(os.path.join(npath, "power/control")).strip() or "?"
+    print("reset %s:%s: %03d/%03d -> %03d/%03d  (power/control=%s)"
+          % (vendor, product or "*", bus, dev, nbus, ndev, ctrl))
+    print("device name is now: epkowa:interpreter:%03d:%03d" % (nbus, ndev))
+    return 0
+
+
+def fetch_one(name: str, spec: dict, dest: str, dry: bool = False) -> bool:
+    url = spec["url"]
+    target = os.path.join(dest, url.rsplit("/", 1)[-1])
+    print("  %s: %s" % (name, url))
+    if dry:
+        print("    would download to %s and verify" % target)
+        return True
+    os.makedirs(dest, exist_ok=True)
+    req = urllib.request.Request(url, headers={"User-Agent": "epson-esci/1.0"})
+    with urllib.request.urlopen(req, timeout=300) as resp, open(target, "wb") as fh:
+        shutil.copyfileobj(resp, fh)
+    for algo in ("sha256", "sha512"):
+        want = spec.get(algo)
+        if not want:
+            continue
+        got = digest(target, algo)
+        if got != want:
+            print("    CHECKSUM MISMATCH (%s)\n      expected %s\n      got      %s"
+                  % (algo, want, got), file=sys.stderr)
+            return False
+        print("    %s verified" % algo)
+    extract = os.path.join(dest, name)
+    os.makedirs(extract, exist_ok=True)
+    with tarfile.open(target) as tf:
+        tf.extractall(extract, filter="data")
+    debs = []
+    for root, _, files in os.walk(extract):
+        for fn in sorted(files):
+            if fn.endswith(".deb"):
+                debs.append(os.path.join(root, fn))
+    print("    extracted, %d .deb file(s)" % len(debs))
+    for d in debs:
+        print("      " + d)
+    return True
+
+
+def cmd_fetch(args) -> int:
+    names = args.only or list(BUNDLES)
+    print("downloading into " + args.dest)
+    print("these are EPSON's files under EPSON's EULA: fetch them yourself, and never "
+          "commit them\n")
+    ok = True
+    for n in names:
+        ok = fetch_one(n, BUNDLES[n], args.dest, args.dry_run) and ok
+    if not ok:
+        print("a download failed; do not install from a partial directory", file=sys.stderr)
+        return 1
+    if not args.dry_run:
+        print("\nnext: epson-esci install --from " + args.dest)
+    return 0
+
+
+def libsane_shim_needed() -> bool:
+    """iscan depends on the legacy 'libsane' name that Ubuntu 24.04 dropped."""
+    if shutil.which("dpkg-query") is None:
+        return False
+    legacy = subprocess.run(["dpkg-query", "-W", "-f", DPKG_VER, "libsane"],
+                            capture_output=True, text=True)
+    if legacy.returncode == 0 and legacy.stdout.strip():
+        return False
+    cur = subprocess.run(["dpkg-query", "-W", "-f", DPKG_VER, "libsane1"],
+                         capture_output=True, text=True)
+    return bool(cur.stdout.strip())
+
+
+def cmd_install(args) -> int:
+    src = args.frm
+    if not exists(src):
+        print("%s does not exist -- run 'epson-esci fetch --dest %s' first" % (src, src),
+              file=sys.stderr)
+        return 2
+    debs, rules = {}, []
+    for root, _, files in os.walk(src):
+        for fn in sorted(files):
+            full = os.path.join(root, fn)
+            if fn.endswith(".deb"):
+                debs[fn] = full
+            elif fn.endswith(".rules") and "iscan" in fn:
+                rules.append(full)
+    if not debs:
+        print("no .deb files under %s" % src, file=sys.stderr)
+        return 2
+
+    def pick(prefix):
+        return next((p for n, p in debs.items() if n.startswith(prefix)), None)
+
+    print("install plan from %s%s\n" % (src, " (dry run)" if args.dry_run else ""))
+
+    if libsane_shim_needed():
+        print("* build a transitional 'libsane' package depending on libsane1")
+        print("  (iscan needs the legacy name; libsane1 does not Provide it)")
+        if not args.dry_run:
+            ver = subprocess.run(["dpkg-query", "-W", "-f", DPKG_VER, "libsane1"],
+                                 capture_output=True, text=True).stdout.strip()
+            stage = tempfile.mkdtemp(prefix="libsane-shim-")
+            os.makedirs(os.path.join(stage, "DEBIAN"))
+            with open(os.path.join(stage, "DEBIAN", "control"), "w") as fh:
+                fh.write("Package: libsane\nVersion: %s\nArchitecture: amd64\n"
+                         "Maintainer: local admin <root@localhost>\n"
+                         "Depends: libsane1 (>= 1.0.11-3)\n"
+                         "Section: libs\nPriority: optional\n"
+                         "Description: transitional shim for the legacy libsane name\n"
+                         " The runtime library is supplied by libsane1.\n" % ver)
+            out = "/tmp/libsane-shim.deb"
+            if run(["dpkg-deb", "-b", stage, out], dry=args.dry_run) != 0:
+                return 1
+            if run(["sudo", "dpkg", "-i", out], dry=args.dry_run) != 0:
+                return 1
+
+    for prefix in ("iscan-data", "iscan_", "iscan-plugin"):
+        path = pick(prefix)
+        if path:
+            run(["sudo", "apt-get", "install", "-y", path], dry=args.dry_run)
+
+    for path in rules:
+        dest = os.path.join("/etc/udev/rules.d", os.path.basename(path))
+        print("* install udev rule " + dest)
+        run(["sudo", "cp", path, dest], dry=args.dry_run)
+        run(["sudo", "udevadm", "control", "--reload-rules"], dry=args.dry_run)
+
+    print("* register interpreters")
+    run(["sudo", "iscan-registry", "-a"], dry=args.dry_run)
+
+    print("* repair firmware against the known-good/known-bad table")
+    if args.dry_run:
+        print("  would run: epson-esci firmware --repair --from " + src)
+    else:
+        cmd_firmware(argparse.Namespace(repair=True, frm=src))
+
+    print("\nverify with:  scanimage -L   (then wait a few seconds)")
+    return 0
+
+
+# -------------------------------------------------------------------------- main
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="epson-esci", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("detect", help="list attached EPSON scanners and what they need")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_detect)
+
+    s = sub.add_parser("explain", help="print the requirement chain for a USB id")
+    s.add_argument("usbid", nargs="?", help="e.g. 04b8:013d")
+    s.set_defaults(func=cmd_explain)
+
+    s = sub.add_parser("doctor", help="run every check and give a verdict")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_doctor)
+
+    s = sub.add_parser("firmware", help="check or repair interpreter firmware blobs")
+    s.add_argument("--repair", action="store_true")
+    s.add_argument("--from", dest="frm", metavar="DIR")
+    s.set_defaults(func=cmd_firmware)
+
+    s = sub.add_parser("reset", help="USB-reset a wedged scanner")
+    s.add_argument("usbid", nargs="?", default=EPSON_VENDOR + ":013d")
+    s.add_argument("--timeout", type=float, default=25.0)
+    s.set_defaults(func=cmd_reset)
+
+    s = sub.add_parser("fetch", help="download and verify EPSON bundles")
+    s.add_argument("--dest", default="~/epson-esci-cache")
+    s.add_argument("--only", action="append", choices=sorted(BUNDLES))
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(func=cmd_fetch)
+
+    s = sub.add_parser("install", help="install from a fetched directory")
+    s.add_argument("--from", dest="frm", required=True, metavar="DIR")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(func=cmd_install)
+
+    args = p.parse_args()
+    if hasattr(args, "dest"):
+        args.dest = os.path.expanduser(args.dest)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

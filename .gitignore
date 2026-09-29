@@ -1,0 +1,19 @@
+# EPSON ships these under a licence that forbids redistribution. They are
+# produced by "epson-esci fetch" and must never be committed. See README,
+# "Redistribution and licensing".
+*.deb
+*.deb.tar.gz
+*.tar.gz
+esfw*.bin
+60-iscan.rules
+epson-esci-cache/
+iscan-*-bundle/
+epsonscan2-*bundle*/
+
+# scratch scans: a real scan can contain somebody else's personal data
+*.png
+*.tif
+*.jpg
+
+__pycache__/
+*.pyc
