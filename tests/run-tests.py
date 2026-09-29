@@ -254,7 +254,7 @@ def test_devices(esci, fx):
 
 
 def test_cli(esci, fx):
-    print("[5] command line behaviour")
+    print("[6] command line behaviour")
     env = {
         "EPSON_ESCI_SYSFS": fx["sysfs"],
         "EPSON_ESCI_DESC": fx["desc"],
@@ -285,6 +285,62 @@ def test_cli(esci, fx):
     check("no device is an error, not a crash", rc == 1, str(rc))
 
 
+def test_probe(esci, fx):
+    print("[5] liveness probe")
+    dev = {"busnum": 9, "devnum": 101}
+    orig_which = esci.shutil.which
+    orig_run = esci.subprocess.run
+    orig_exists = esci.exists
+    try:
+        esci.shutil.which = lambda name: None
+        lvl, note = esci.probe_device(dev)
+        check("probe degrades without scanimage", lvl == esci.INFO, lvl)
+        esci.shutil.which = lambda name: "/usr/bin/scanimage"
+
+        class Res:
+            def __init__(self, rc, err):
+                self.returncode = rc
+                self.stderr = err
+
+        made = {"size": 0, "rc": 0, "err": ""}
+
+        def fake_run(cmd, **kw):
+            made["cmd"] = cmd
+            with open(cmd[-1], "w") as fh:
+                fh.write("x" * made["size"])
+            return Res(made["rc"], made["err"])
+
+        esci.subprocess.run = fake_run
+
+        made["size"], made["rc"] = 4986, 0
+        lvl, note = esci.probe_device(dev)
+        check("healthy device passes", lvl == esci.OK, lvl + " " + note)
+        check("probe addresses the interpreter device",
+              "epkowa:interpreter:009:101" in made["cmd"], str(made["cmd"][:6]))
+
+        made["size"], made["rc"] = 0, 1
+        made["err"] = "scanimage: open of device failed: Error during device I/O"
+        lvl, note = esci.probe_device(dev)
+        check("wedged device fails", lvl == esci.FAIL, lvl)
+        check("failure tells you to reset", "reset" in note, note)
+        check("failure quotes the device", "device I/O" in note, note)
+
+        made["size"], made["rc"] = 0, 124
+        made["err"] = ""
+        lvl, note = esci.probe_device(dev)
+        check("timeout reported as a timeout", "never answered" in note, note)
+
+        made["size"], made["rc"] = 138, 0
+        made["err"] = "scanimage: rounded value of resolution from 50 to 300"
+        lvl, note = esci.probe_device(dev)
+        check("a 138 byte answer is not called healthy", lvl != esci.OK, lvl)
+        check("a rounding notice is not called an error", "rounded" not in note, note)
+    finally:
+        esci.shutil.which = orig_which
+        esci.subprocess.run = orig_run
+
+
+
 def main():
     esci = load_tool()
     root = tempfile.mkdtemp(prefix="epson-esci-tests-")
@@ -295,6 +351,7 @@ def main():
         test_parsing(esci, fx)
         test_firmware(esci, fx)
         test_devices(esci, fx)
+        test_probe(esci, fx)
         test_cli(esci, fx)
     finally:
         import shutil

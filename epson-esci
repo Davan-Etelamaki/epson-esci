@@ -648,6 +648,45 @@ def cmd_explain(args) -> int:
     return 0
 
 
+def probe_device(dev, timeout=60):
+    """Ask the scanner for a 10 mm greyscale strip.
+
+    Everything else in doctor is read-only, so it cannot see the wedged state:
+    driver, plugin, firmware and permissions all correct, but the scanner has
+    lost its uploaded firmware and refuses bulk transfers. Only the device knows
+    that, so the honest check is to ask it. This moves the scan head, which is
+    why it is opt-in.
+
+    Resolution is left at the driver default on purpose. Asking for 50 dpi gets
+    silently rounded up, and a 1 mm strip then comes back as a 138 byte PNG --
+    a genuine answer, but too close to nothing to call healthy.
+    """
+    if shutil.which("scanimage") is None:
+        return INFO, "scanimage not installed, so the device was not probed"
+    name = "epkowa:interpreter:%03d:%03d" % (dev["busnum"], dev["devnum"])
+    out = os.path.join(tempfile.gettempdir(), "epson-esci-probe.png")
+    if exists(out):
+        os.unlink(out)
+    cmd = ["timeout", str(timeout), "scanimage", "-d", name, "--mode", "Gray",
+           "-l", "0", "-t", "0", "-x", "10", "-y", "10", "--format", "png", "-o", out]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    size = os.path.getsize(out) if exists(out) else 0
+    if exists(out):
+        os.unlink(out)
+    lines = [x for x in (proc.stderr or "").strip().splitlines()
+             if "rounded" not in x.lower() and x.strip()]
+    hint = " -- " + lines[-1] if lines else ""
+    if proc.returncode == 124:
+        return FAIL, ("device never answered within %ds%s; run: sudo epson-esci reset"
+                      % (timeout, hint))
+    if proc.returncode != 0:
+        return FAIL, ("device refused the scan%s; run: sudo epson-esci reset" % hint)
+    if size <= 500:
+        return WARN, ("device answered but returned only %d bytes; try a scan by hand"
+                      % size)
+    return OK, "device answered with a %d byte scan" % size
+
+
 def cmd_doctor(args) -> int:
     devs = find_epson_devices()
     if not devs:
@@ -657,6 +696,12 @@ def cmd_doctor(args) -> int:
     report, worst = {}, 0
     for dev in devs:
         rows = checks_for(dev)
+        if getattr(args, "probe", False):
+            level, detail = probe_device(dev)
+            fix = "" if level != FAIL else (
+                "sudo epson-esci reset %s:%s"
+                % (dev["vendor"], dev["product"]))
+            rows.append((level, "device liveness", detail, fix))
         report["%s:%s" % (dev["vendor"], dev["product"])] = rows
         worst = max(worst, max((rank[l] for l, _, _, _ in rows), default=0))
         if not args.json:
@@ -986,6 +1031,8 @@ def main() -> int:
 
     s = sub.add_parser("doctor", help="run every check and give a verdict")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--probe", action="store_true",
+                   help="ask the scanner to actually scan; catches a wedged device")
     s.set_defaults(func=cmd_doctor)
 
     s = sub.add_parser("firmware", help="check or repair interpreter firmware blobs")
