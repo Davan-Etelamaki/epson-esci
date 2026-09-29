@@ -11,7 +11,7 @@ them.
 
 The tool reads SANE's own device databases to work out what any attached EPSON
 scanner needs, so the **diagnosis** covers all 594 models in `epkowa.desc`. The
-**automated fix** currently covers 1 of the 19 plugin families — see
+**automated fix** covers 13 of the 19 plugin families — see
 [Scope](#scope-what-works-for-which-models). It ships no EPSON binaries — see
 [Redistribution](#redistribution-and-licensing).
 
@@ -35,6 +35,7 @@ $ ./epson-esci detect
 - [Why GUIs show no scanners for a few seconds](#why-guis-show-no-scanners-for-a-few-seconds)
 - [Troubleshooting](#troubleshooting)
 - [Supporting another model](#supporting-another-model)
+- [Tests](#tests)
 - [Redistribution and licensing](#redistribution-and-licensing)
 - [Tested against](#tested-against)
 
@@ -59,32 +60,45 @@ Measured, not aspirational:
 
 | Commands | Coverage |
 | --- | --- |
-| `detect`, `explain`, `doctor`, `reset` | all 594 models in `epkowa.desc` — everything is read from your system at run time |
-| `fetch`, `install`, `firmware --repair` | **1 of 19 plugin families**: `iscan-plugin-gt-s650`, i.e. GT-S650 and Perfection V39 |
+| `detect`, `explain`, `doctor`, `reset` | all 594 models in `epkowa.desc` — read from your system at run time |
+| `fetch`, `install` | **13 of the 19 plugin families** — 9 as `.deb`, 4 as rpm only |
+| `firmware` | names the source package for 7 families; gives a verdict only where a human has confirmed one |
 
 Worth knowing before you decide this tool is for you: **545 of those 594 models
 need no plugin at all** — open-source SANE handles them, and you want
 `sane-airscan` or the `epsonds` backend instead. This exists for the awkward 49
 that need a non-free interpreter and look physically dead without one.
 
-If `explain` names a plugin other than `iscan-plugin-gt-s650`, expect
-`doctor`, `explain` and `reset` to work and `fetch` to have nothing to download.
-Install the plugin from your distribution, then use `firmware` to check the blob.
-[Supporting another model](#supporting-another-model) is around 15 minutes per
-family and pull requests are welcome.
+The 13 families `fetch` can install:
+
+| | |
+| --- | --- |
+| `.deb` | `cx4400` `ds-30` `gt-1500` `gt-f670` `gt-f700` `gt-s650` `gt-x750` `gt-x770` `perfection-v370` |
+| rpm only | `gt-s600` `gt-x820` `gt-x830` `perfection-v550` |
+| no bundle exists | `gt-7200` `gt-7300` `gt-9400` `gt-f500` `gt-f520` `gt-f600` |
+
+Those last six are 2004-era flatbeds and old WorkForce units. EPSON CDN answers
+404 for every version of them in both formats, so `fetch` names the gap and
+points at your distribution rather than failing with a bare HTTP error.
+`doctor`, `explain` and `reset` still work for them — only `fetch` and `install`
+need the bundle.
 
 ## Quick start
 
 ```bash
+curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/main/epson-esci
+chmod +x epson-esci            # or: sudo make install
+
 ./epson-esci doctor            # what is wrong, and what fixes it
-./epson-esci fetch             # download EPSON bundles, verify checksums
+./epson-esci fetch             # download what this scanner needs, verify checksums
 ./epson-esci install --from ~/epson-esci-cache
-./epson-esci doctor            # should now report "working, with warnings"
+./epson-esci doctor --probe    # ask the scanner to actually scan
 scanimage -L                   # then wait a few seconds for the list to fill
 ```
 
-`install` is the only command that needs root, and `--dry-run` on it prints the
-whole plan without touching the system.
+`fetch` works out which plugin your scanner needs from `epkowa.desc`, so it
+downloads one bundle rather than nineteen. `install` is the only command that
+needs root, and `--dry-run` prints the whole plan without touching the system.
 
 ## Why these scanners look dead
 
@@ -111,14 +125,15 @@ Plus the boring one: your user must be allowed to open `/dev/bus/usb/BBB/DDD`.
 | --- | --- | --- |
 | `detect [--json]` | List attached EPSON devices and what each needs | no |
 | `explain [usbid]` | Full requirement chain for a USB id, or for the attached device | no |
-| `doctor [--json]` | Every check, plus a verdict; exits non-zero if broken | no |
+| `doctor [--json] [--probe]` | Every check, plus a verdict; exits non-zero if broken | no |
 | `firmware [--repair --from DIR]` | Classify firmware blobs against known-good/known-bad hashes | write needs root |
 | `reset [usbid]` | USB-reset a wedged scanner, print its new device name | yes |
-| `fetch [--dest DIR] [--only NAME]` | Download and verify EPSON bundles | no |
+| `fetch [--dest DIR] [--only FAM] [--all]` | Download and verify what this scanner needs | no |
 | `install --from DIR [--dry-run]` | Install from a fetched directory | yes |
 
 `doctor` exits 0 when healthy or merely warned, 1 when something is broken — so it
-works as a CI or boot check.
+works as a CI or boot check. `--probe` is opt-in because it is the one command
+that touches hardware: it makes the scan head move.
 
 ## How detection works
 
@@ -195,6 +210,18 @@ device name is now: epkowa:interpreter:009:081
 Never hard-code the `BBB:DDD` suffix. It changes on every re-plug and every reset.
 `scanimage -L` is always authoritative.
 
+A plain `doctor` **cannot see this state**. Every check in it is read-only, and
+every one of them passes while the scanner refuses to talk — only the device
+knows. `--probe` is the check that asks the device:
+
+```
+$ ./epson-esci doctor --probe
+  [PASS] device liveness: device answered with a 4952 byte scan
+```
+
+A `FAIL` there means the reset above is the fix. Where `scanimage` is not
+installed the check reports INFO rather than guessing.
+
 ## USB power and topology
 
 These scanners are bus-powered and typically declare 500 mA. Cascaded unpowered
@@ -232,6 +259,7 @@ Wait a few seconds, or delete the `net autodiscovery` lines from the backends
 | `Access denied` as user, works as root | no udev rule for this id | install EPSON's `60-iscan.rules` — shipped in the bundle root, **not by any .deb** |
 | `sane_start: Invalid argument` | wrong firmware build for this board rev | `epson-esci firmware --repair --from <dir>` |
 | `Error during device I/O` | lost firmware state | `sudo epson-esci reset` |
+| `doctor` says working, scans still fail | wedged, invisible to read-only checks | `./epson-esci doctor --probe`, then reset |
 | `no backend` / absent from `scanimage -L` | epkowa not enabled | add `epkowa` to `/etc/sane.d/dll.d/iscan` |
 | Two devices listed, long pauses | `epkowa.conf` narrowed to `usb 0x04b8 0x013d` | use a bare `usb` line |
 | Works, then dies after an apt upgrade | plugin reinstall restored bad firmware | `sudo apt-mark hold iscan-plugin-gt-s650` |
@@ -244,14 +272,56 @@ Wait a few seconds, or delete the `net autodiscovery` lines from the backends
 To add end-to-end fetch/repair for a new plugin family:
 
 1. Find the plugin name: `./epson-esci explain 04b8:XXXX`.
-2. Get EPSON's bundle URL and record its sha256 or sha512 in `BUNDLES`. The AUR
-   PKGBUILDs are a good independent source for those checksums — cross-check.
-3. If the blob collides across packages, add its sha1 to `FIRMWARE_DB` under
-   `good`, `bad` or `unknown` with a note naming the package and the affected
-   board revision.
+2. Read the family off it (`iscan-plugin-gt-x820` → `gt-x820`) and probe EPSON's
+   CDN, which is regular:
+
+   ```
+   https://download2.ebz.epson.net/iscan/plugin/<family>/{deb,rpm}/x64/
+       iscan-<family>-bundle-<bundlever>.x64.{deb,rpm}.tar.gz
+   ```
+
+   Two traps, both found the hard way:
+   - **`<bundlever>` is the iscan core version, not the plugin version.** They
+     differ per family and using the plugin version 404s. Most families are on
+     `2.30.4`; `gt-f500`, `gt-f520` and `gt-f600` are on `2.27.1`.
+   - **Four families publish rpm only.** A deb-only assumption silently finds
+     nothing for `gt-s600`, `gt-x820`, `gt-x830` and `perfection-v550`.
+
+3. Download it, hash it, and record the sha256 you computed in `BUNDLES`. Never
+   record a checksum you did not compute yourself from a completed download.
+4. Extract the firmware blob, hash it with sha1, and if it collides across
+   packages add it to `FIRMWARE_DB` under `good`, `conflict` or `unknown` with a
+   note naming the package and the board revision. `OBSERVED_FIRMWARE` is derived
+   from `BUNDLES`, so step 3 already tells `firmware` where a blob came from.
+5. Add the same entry to `data/verified-sources.json`; a test fails if the two
+   disagree.
 
 Deliberate limit: only bundles whose checksums are recorded can be fetched. An
 unverified download is worse than none.
+
+**What "verified" means here.** For all 13 families the URL resolves and the
+checksum was reproduced from a local download. That is not a fixed scanner:
+only `gt-s650` / Perfection V39 has been confirmed to scan end to end.
+
+## Tests
+
+```bash
+make test          # or: python3 tests/run-tests.py
+```
+
+53 checks. No scanner, no root, no network. Fixtures stand in for sysfs,
+`epkowa.desc`, the interpreter registry, the SANE device table and udev, so the
+generic paths get exercised for models nobody here owns — including the failure
+modes that are awkward to reproduce on purpose: a wedged device, a registry with
+no line for the attached scanner, a firmware build from the wrong package.
+
+Every data path is overridable so fixtures can be used at all:
+`EPSON_ESCI_SYSFS`, `EPSON_ESCI_DESC`, `EPSON_ESCI_INTERPRETER`,
+`EPSON_ESCI_SANE_DOC`, `EPSON_ESCI_SANE_CONFIG`, `EPSON_ESCI_UDEV_DIRS`.
+
+The suite is checked against deliberate regressions — a corrupted checksum, a
+firmware conflict promoted to a hard failure, a broken derivation — and it fails
+on each. A suite that cannot fail is not evidence.
 
 ## Redistribution and licensing
 
@@ -288,6 +358,12 @@ firmware swap on hardware you own is inside the licence's personal-use grant.
 - `epson-esci explain` verified against `04b8:014a`, `04b8:012d`, `04b8:012a`,
   `04b8:0119`, `04b8:012c`, correctly distinguishing plugin-required models from
   ones SANE already marks `Complete`.
+- All 13 fetchable families: bundle URL resolves over https and the recorded
+  sha256 reproduced from a local download. Seven firmware blobs extracted and
+  hashed. Re-downloading the `gt-s650` bundle yields exactly the blob that broke
+  this scanner, which reproduces the diagnosis from a clean download.
+- 53 fixture checks pass (`make test`), and were confirmed to fail on three
+  deliberate regressions.
 - Pop!_OS 24.04 (Ubuntu 24.04 base), sane-backends 1.2.1, kernel 7.1.5.
 
 ## Provenance
