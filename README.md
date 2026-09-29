@@ -88,6 +88,10 @@ The 13 families `fetch` can install:
 | --- | --- |
 | `.deb` | `cx4400` `ds-30` `gt-1500` `gt-f670` `gt-f700` `gt-s650` `gt-x750` `gt-x770` `perfection-v370` |
 | rpm only | `gt-s600` `gt-x820` `gt-x830` `perfection-v550` |
+
+On those four, `fetch` works and `install` stops short: it prints the `dnf` or
+`rpm` commands for the packages it fetched and still installs the udev rule,
+rather than running apt at a system that has no apt.
 | no bundle exists | `gt-7200` `gt-7300` `gt-9400` `gt-f500` `gt-f520` `gt-f600` |
 
 Those last six are 2004-era flatbeds and old WorkForce units. EPSON CDN answers
@@ -144,7 +148,8 @@ Plus the boring one: your user must be allowed to open `/dev/bus/usb/BBB/DDD`.
 | `install --from DIR [--dry-run]` | Install from a fetched directory | yes |
 
 `doctor` exits 0 when healthy or merely warned, 1 when something is broken — so it
-works as a CI or boot check. `--probe` is opt-in because it is the one command
+works as a CI or boot check. `--version`, `doctor --json` and the exact command
+you ran are the three things worth pasting into a bug report. `--probe` is opt-in because it is the one command
 that touches hardware: it makes the scan head move.
 
 ## How detection works
@@ -276,6 +281,7 @@ Wait a few seconds, or delete the `net autodiscovery` lines from the backends
 | Two devices listed, long pauses | `epkowa.conf` narrowed to `usb 0x04b8 0x013d` | use a bare `usb` line |
 | Works, then dies after an apt upgrade | plugin reinstall restored bad firmware | `sudo apt-mark hold iscan-plugin-gt-s650` |
 | GUI shows nothing for ~5 s | mDNS discovery | wait, or drop `net autodiscovery` |
+| `install` on Fedora/openSUSE does nothing | family is rpm-only | it prints the rpm commands; the udev rule still gets installed |
 | Random wedging | starved bus power | direct port or self-powered hub |
 
 ## Supporting another model

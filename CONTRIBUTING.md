@@ -51,6 +51,6 @@ confirmed on real hardware, and say which revision.
 
 ## Bug reports
 
-Please include the output of `epson-esci doctor --json`. The checks are
-data-driven, so a wrong verdict is usually a missing table entry, and the JSON
-says exactly which check fired.
+Please include the output of `epson-esci doctor --json` and `epson-esci
+--version`. The checks are data-driven, so a wrong verdict is usually a missing
+table entry, and the JSON says exactly which check fired.

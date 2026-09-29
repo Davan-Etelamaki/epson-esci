@@ -56,6 +56,7 @@ SYSFS_USB = _path("EPSON_ESCI_SYSFS", "/sys/bus/usb/devices")
 EPSON_VENDOR = "04b8"
 # dpkg-query version format, assembled at runtime so this stays a literal.
 DPKG_VER = "$" + "{Version}"
+VERSION = "1.0"
 
 EPKOWA_DESC = _path("EPSON_ESCI_DESC", "/usr/share/iscan-data/epkowa.desc")
 INTERPRETER_DB = _path("EPSON_ESCI_INTERPRETER", "/var/lib/iscan/interpreter")
@@ -999,22 +1000,37 @@ def cmd_install(args) -> int:
         print("%s does not exist -- run 'epson-esci fetch --dest %s' first" % (src, src),
               file=sys.stderr)
         return 2
-    debs, rules = {}, []
+    debs, rpms, rules = {}, {}, []
     for root, _, files in os.walk(src):
         for fn in sorted(files):
             full = os.path.join(root, fn)
             if fn.endswith(".deb"):
                 debs[fn] = full
+            elif fn.endswith(".rpm"):
+                rpms[fn] = full
             elif fn.endswith(".rules") and "iscan" in fn:
                 rules.append(full)
-    if not debs:
-        print("no .deb files under %s" % src, file=sys.stderr)
+    if not debs and not rpms:
+        print("no .deb or .rpm files under %s" % src, file=sys.stderr)
+        print("run: epson-esci fetch --dest %s" % src, file=sys.stderr)
         return 2
+
 
     def pick(prefix):
         return next((p for n, p in debs.items() if n.startswith(prefix)), None)
 
     print("install plan from %s%s\n" % (src, " (dry run)" if args.dry_run else ""))
+
+    if not debs:
+        # Four families publish rpm only, so this is a supported fetch with an
+        # installer that cannot use it. Say so instead of reporting no files.
+        print("this bundle is rpm-only and this installer drives apt/dpkg.\n")
+        print("install what you fetched yourself, then re-run doctor:")
+        for n in sorted(rpms):
+            print("  sudo dnf install %s" % rpms[n])
+            print("  # or: sudo rpm -Uvh %s" % rpms[n])
+        print("  epson-esci doctor", end="\n\n")
+        print("the udev rule below is format-agnostic and still needed:\n")
 
     if libsane_shim_needed():
         print("* build a transitional 'libsane' package depending on libsane1")
@@ -1048,6 +1064,13 @@ def cmd_install(args) -> int:
         run(["sudo", "cp", path, dest], dry=args.dry_run)
         run(["sudo", "udevadm", "control", "--reload-rules"], dry=args.dry_run)
 
+    if not debs:
+        # On an rpm system iscan itself is not in place yet, so registering
+        # interpreters and swapping firmware would fail for reasons that have
+        # nothing to do with this tool.
+        print("\nrun the commands above, then: epson-esci doctor --probe")
+        return 1
+
     print("* register interpreters")
     run(["sudo", "iscan-registry", "-a"], dry=args.dry_run)
 
@@ -1066,6 +1089,7 @@ def cmd_install(args) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(prog="epson-esci", description=__doc__.splitlines()[0])
+    p.add_argument("--version", action="version", version="epson-esci " + VERSION)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("detect", help="list attached EPSON scanners and what they need")
@@ -1073,7 +1097,7 @@ def main() -> int:
     s.set_defaults(func=cmd_detect)
 
     s = sub.add_parser("explain", help="print the requirement chain for a USB id")
-    s.add_argument("usbid", nargs="?", help="e.g. 04b8:013d")
+    s.add_argument("usbid", nargs="?", help="e.g. 04b8:013d or \"Perfection V39\"")
     s.set_defaults(func=cmd_explain)
 
     s = sub.add_parser("doctor", help="run every check and give a verdict")
