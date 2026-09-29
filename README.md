@@ -51,8 +51,21 @@ Your scanner shows one of these, and you have confirmed it is listed as
 - `scanimage -d <device>` fails with `Error during device I/O`.
 
 Models that behave this way include the Perfection V19, V33, V35, V37, V39, V370,
-GT-S640, GT-S650, GT-F500, GT-F600, GT-F700 and relatives. `epson-esci explain
-<usbid>` tells you whether a given id needs a plugin.
+GT-S640, GT-S650, GT-F500, GT-F600, GT-F700 and relatives. To check before you
+install anything, name the scanner the way it is printed on the label:
+
+```
+$ ./epson-esci explain "Perfection V39"
+04b8:013d
+  model   Perfection V39
+  status  good   interface USB
+  plugin  iscan-plugin-gt-s650
+  note    requires DFSG non-free iscan-plugin-gt-s650; overseas version of the GT-S650
+  open-source SANE says: Unsupported -- supported by the epkowa backend plus non-free interpreter
+```
+
+A name that matches several ids is listed rather than guessed, because printing
+a confident answer about the wrong scanner is the worst thing this tool could do.
 
 ## Scope: what works for which models
 
@@ -123,7 +136,7 @@ Plus the boring one: your user must be allowed to open `/dev/bus/usb/BBB/DDD`.
 | Command | What it does | Root |
 | --- | --- | --- |
 | `detect [--json]` | List attached EPSON devices and what each needs | no |
-| `explain [usbid]` | Full requirement chain for a USB id, or for the attached device | no |
+| `explain [id or model name]` | Requirement chain for a USB id, a model name, or the attached device | no |
 | `doctor [--json] [--probe]` | Every check, plus a verdict; exits non-zero if broken | no |
 | `firmware [--repair --from DIR]` | Classify firmware blobs against known-good/known-bad hashes | write needs root |
 | `reset [usbid]` | USB-reset a wedged scanner, print its new device name | yes |

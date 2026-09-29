@@ -190,6 +190,9 @@ def test_parsing(esci, fx):
     check("open-source verdict read from docs", st and st[0] == "Unsupported", str(st))
     st2 = esci.sane_open_source_status("04b8", "012a")
     check("supported model reads Complete", st2 and st2[0] == "Complete", str(st2))
+    tags = [e["comment"] for v in by.values() for e in v if e.get("comment")]
+    check("literal <br> folded out of comments",
+          not any("<br" in c for c in tags), str(tags[:1]))
 
 
 def test_firmware(esci, fx):
@@ -268,6 +271,16 @@ def test_cli(esci, fx):
     check("detect names the V39", "Perfection V39" in out and "04b8:013d" in out, out[:120])
     rc, out = run_cli(["explain", "04b8:012a"], env)
     check("supported model shows no plugin", "none named" in out, out[:160])
+    rc, out = run_cli(["explain", "Perfection V39"], env)
+    check("explain accepts the name printed on the scanner",
+          rc == 0 and "iscan-plugin-gt-s650" in out, out[:160])
+    rc, out = run_cli(["explain", "04b8 013d"], env)
+    check("explain accepts a space separated id", rc == 0, out[:120])
+    rc, out = run_cli(["explain", "Perfection"], env)
+    check("an ambiguous name is reported, not guessed",
+          rc == 1 and "matches" in out, out[:160])
+    rc, out = run_cli(["explain", "definitely-not-a-model"], env)
+    check("an unknown model is an error", rc == 1, str(rc))
     rc, out = run_cli(["fetch", "--dry-run", "--dest", os.path.join(fx["dir"], "cache")], env)
     check("fetch picks the device bundle", "gt-s650" in out, out[:200])
     check("fetch flags rpm-only families", "rpm only" in out, out[:300])

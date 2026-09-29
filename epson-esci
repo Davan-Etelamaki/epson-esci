@@ -278,9 +278,13 @@ def parse_epkowa_desc(path=None) -> dict:
 
     def flush():
         if cur and cur.get("usbid"):
-            by_usbid.setdefault(cur["usbid"], []).append(
-                {k: cur.get(k) for k in ("model", "interface", "status", "comment")}
-            )
+            # epkowa.desc separates multi-line prose with a literal <br>, which
+            # is unreadable once printed, and folds it onto one line for us.
+            note = (cur.get("comment") or "").replace("<br>", "; ")
+            note = re.sub(r"\s+", " ", note).strip().rstrip(";") or None
+            row = {k: cur.get(k) for k in ("model", "interface", "status")}
+            row["comment"] = note
+            by_usbid.setdefault(cur["usbid"], []).append(row)
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -614,24 +618,67 @@ def cmd_detect(args) -> int:
     return 0
 
 
+def explain_target(token):
+    """Resolve a USB id or a model name to {(vendor, product): [entries]}.
+
+    People arrive knowing the name printed on the scanner, not 04b8:013d, so
+    both work. An exact model name wins over substring hits. A substring that
+    matches several ids is reported instead of guessed at: picking one silently
+    would print a confident answer about the wrong scanner.
+    """
+    by = parse_epkowa_desc()
+    if not by:
+        return None, "%s is missing or empty; is iscan-data installed?" % EPKOWA_DESC
+    parts = token.replace(":", " ").split()
+    # 'Perfection V39' is two tokens too, so only read it as an id when both
+    # halves actually look like hex ids.
+    if len(parts) == 2 and all(re.fullmatch(r"(0x)?[0-9a-fA-F]{1,4}", p)
+                               for p in parts):
+        key = (norm_id(parts[0]), norm_id(parts[1]))
+        if key in by:
+            return {key: by[key]}, None
+        return None, ("%s is not in %s" % (token, EPKOWA_DESC))
+    needle = token.strip().lower()
+    exact, partial = {}, {}
+    for key, entries in by.items():
+        for e in entries:
+            model = e["model"].strip().lower()
+            if model == needle:
+                exact.setdefault(key, []).append(e)
+            elif needle in model:
+                partial.setdefault(key, []).append(e)
+    if exact:
+        return exact, None
+    if len(partial) == 1:
+        return partial, None
+    if partial:
+        rows = sorted(set("%s:%s  %s" % (k[0], k[1], e["model"])
+                          for k, v in partial.items() for e in v))
+        shown = rows[:12]
+        more = "" if len(rows) <= 12 else "\n  ... and %d more" % (len(rows) - 12)
+        return None, ("'%s' matches %d ids; name one of them:\n  %s%s"
+                      % (token, len(rows), "\n  ".join(shown), more))
+    return None, "no model in %s matches '%s'" % (EPKOWA_DESC, token)
+
+
 def cmd_explain(args) -> int:
     if args.usbid:
-        vendor, _, product = args.usbid.partition(":")
-        entries = parse_epkowa_desc().get((norm_id(vendor), norm_id(product)), [])
-        if not entries:
-            print("%s is not in %s" % (args.usbid, EPKOWA_DESC), file=sys.stderr)
-            print("is iscan-data installed?", file=sys.stderr)
+        targets, err = explain_target(args.usbid)
+        if err:
+            print(err, file=sys.stderr)
             return 1
-        print(args.usbid)
-        for e in entries:
-            print("  model   %s" % e["model"])
-            print("  status  %s   interface %s" % (e["status"], e["interface"]))
-            print("  plugin  %s" % (plugin_from_comment(e.get("comment")) or "none named"))
-            if e.get("comment"):
-                print("  note    %s" % e["comment"])
-        doc = sane_open_source_status(vendor, product)
-        if doc:
-            print("  open-source SANE says: %s -- %s" % doc)
+        for (vendor, product), entries in sorted(targets.items()):
+            print("%s:%s" % (vendor, product))
+            for e in entries:
+                print("  model   %s" % e["model"])
+                print("  status  %s   interface %s" % (e["status"], e["interface"]))
+                print("  plugin  %s" % (plugin_from_comment(e.get("comment"))
+                                        or "none named"))
+                if e.get("comment"):
+                    print("  note    %s" % e["comment"])
+            doc = sane_open_source_status(vendor, product)
+            if doc:
+                print("  open-source SANE says: %s -- %s" % doc)
         return 0
 
     devs = find_epson_devices()
