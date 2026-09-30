@@ -111,6 +111,17 @@ need the bundle.
 ```bash
 curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/main/epson-esci
 chmod +x epson-esci            # one file, stdlib only; or: sudo make install
+```
+
+Right after a push that URL can serve the previous copy for a few minutes:
+GitHub caches it for 5 minutes per path, and a cache-busting query string does
+not help because the cache key ignores the query. To fetch an exact commit, put
+the sha in the path — that is never stale:
+
+```bash
+curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/<commit-sha>/epson-esci
+].join("\n") + "
+```
 
 ./epson-esci doctor            # what is wrong, and what fixes it
 ./epson-esci fetch             # download what this scanner needs, verify checksums
