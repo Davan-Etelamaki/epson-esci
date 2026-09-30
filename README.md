@@ -111,17 +111,6 @@ need the bundle.
 ```bash
 curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/main/epson-esci
 chmod +x epson-esci            # one file, stdlib only; or: sudo make install
-```
-
-Right after a push that URL can serve the previous copy for a few minutes:
-GitHub caches it for 5 minutes per path, and a cache-busting query string does
-not help because the cache key ignores the query. To fetch an exact commit, put
-the sha in the path — that is never stale:
-
-```bash
-curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/<commit-sha>/epson-esci
-].join("\n") + "
-```
 
 ./epson-esci doctor            # what is wrong, and what fixes it
 ./epson-esci fetch             # download what this scanner needs, verify checksums
@@ -133,6 +122,15 @@ scanimage -L                   # then wait a few seconds for the list to fill
 `fetch` works out which plugin your scanner needs from `epkowa.desc`, so it
 downloads one bundle rather than nineteen. `install` is the only command that
 needs root, and `--dry-run` prints the whole plan without touching the system.
+
+Right after a push that `curl` can hand you the previous copy for a few minutes:
+GitHub caches it for 5 minutes per path, and a cache-busting query string does
+not help because the cache key ignores the query. Put the commit sha in the path
+instead, which is never stale:
+
+```bash
+curl -LO https://raw.githubusercontent.com/Davan-Etelamaki/epson-esci/<commit-sha>/epson-esci
+```
 
 ## Why these scanners look dead
 
